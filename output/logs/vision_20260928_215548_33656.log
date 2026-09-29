@@ -1,0 +1,12 @@
+camera=lingyan, index=0, raw=640x480, rotation=none, image=640x480, reported_fps=-1.00
+pose template selected detector: general
+识别分区：1-SW 西南斜视
+pose template selected detector: front-facing
+识别分区：1-S 正面
+识别分区：1-SE 东南斜视
+pose template selected detector: general
+pose template selected detector: start-facing
+识别分区：1-E 东侧
+识别分区：2-N 正面
+pose template selected detector: front-facing
+frames=16630

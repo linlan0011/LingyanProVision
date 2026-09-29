@@ -1,0 +1,17 @@
+{
+  "schema": "lingyan.field_zones.v1",
+  "coordinate_frame": "field_bottom_left_mm",
+  "heading_convention": "0deg=+X, 90deg=+Y, counterclockwise_positive",
+  "zones": [
+    {"name": "1-W 西侧", "x_min_mm": 0, "x_max_mm": 1170, "y_min_mm": 2640, "y_max_mm": 3000, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 1, "view_side": "west"},
+    {"name": "1-E 东侧", "x_min_mm": 1830, "x_max_mm": 3000, "y_min_mm": 2640, "y_max_mm": 3000, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 1, "view_side": "east"},
+    {"name": "1-SW 西南斜视", "x_min_mm": 0, "x_max_mm": 1170, "y_min_mm": 1500, "y_max_mm": 2640, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 1, "view_side": "southwest"},
+    {"name": "1-S 正面", "x_min_mm": 1170, "x_max_mm": 1830, "y_min_mm": 1500, "y_max_mm": 2640, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 1, "view_side": "south"},
+    {"name": "1-SE 东南斜视", "x_min_mm": 1830, "x_max_mm": 3000, "y_min_mm": 1500, "y_max_mm": 2640, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 1, "view_side": "southeast"},
+    {"name": "2-W 西侧", "x_min_mm": 0, "x_max_mm": 1170, "y_min_mm": 0, "y_max_mm": 360, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 2, "view_side": "west"},
+    {"name": "2-E 东侧", "x_min_mm": 1830, "x_max_mm": 3000, "y_min_mm": 0, "y_max_mm": 360, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 2, "view_side": "east"},
+    {"name": "2-NW 西北斜视", "x_min_mm": 0, "x_max_mm": 1170, "y_min_mm": 360, "y_max_mm": 1500, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 2, "view_side": "northwest"},
+    {"name": "2-N 正面", "x_min_mm": 1170, "x_max_mm": 1830, "y_min_mm": 360, "y_max_mm": 1500, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 2, "view_side": "north"},
+    {"name": "2-NE 东北斜视", "x_min_mm": 1830, "x_max_mm": 3000, "y_min_mm": 360, "y_max_mm": 1500, "heading_deg": 0, "heading_tolerance_deg": 180, "safety_zone_id": 2, "view_side": "northeast"}
+  ]
+}

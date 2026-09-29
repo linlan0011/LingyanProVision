@@ -1,0 +1,61 @@
+{
+  "schema": "lingyan.field_zones.v1",
+  "coordinate_frame": "field_bottom_left_mm",
+  "heading_convention": "0deg=+X, 90deg=+Y, counterclockwise_positive",
+  "zones": [
+    {
+      "name": "安全区侧面1",
+      "x_min_mm": 1831.6,
+      "x_max_mm": 2369.8,
+      "y_min_mm": 2646.9,
+      "y_max_mm": 2995.6,
+      "heading_deg": -180.0,
+      "heading_tolerance_deg": 45.0
+    },
+    {
+      "name": "安全区侧面2",
+      "x_min_mm": 641.3,
+      "x_max_mm": 1160.5,
+      "y_min_mm": 2659.6,
+      "y_max_mm": 2995.6,
+      "heading_deg": 0.0,
+      "heading_tolerance_deg": 45.0
+    },
+    {
+      "name": "安全区侧面4",
+      "x_min_mm": 1831.6,
+      "x_max_mm": 2363.5,
+      "y_min_mm": 9.3,
+      "y_max_mm": 370.7,
+      "heading_deg": -180.0,
+      "heading_tolerance_deg": 45.0
+    },
+    {
+      "name": "安全区侧面3",
+      "x_min_mm": 647.6,
+      "x_max_mm": 1160.5,
+      "y_min_mm": 9.3,
+      "y_max_mm": 364.4,
+      "heading_deg": 0.0,
+      "heading_tolerance_deg": 45.0
+    },
+    {
+      "name": "安全区正面2",
+      "x_min_mm": 641.3,
+      "x_max_mm": 2363.5,
+      "y_min_mm": 370.7,
+      "y_max_mm": 1505.6,
+      "heading_deg": -90.0,
+      "heading_tolerance_deg": 45.0
+    },
+    {
+      "name": "安全区正面1",
+      "x_min_mm": 647.6,
+      "x_max_mm": 2363.5,
+      "y_min_mm": 1512.0,
+      "y_max_mm": 2665.9,
+      "heading_deg": 90.0,
+      "heading_tolerance_deg": 45.0
+    }
+  ]
+}

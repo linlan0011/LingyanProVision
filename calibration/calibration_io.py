@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+
+def load_json(path: str | Path) -> dict[str, Any]:
+    with Path(path).open("r", encoding="utf-8") as stream:
+        return json.load(stream)
+
+
+def save_json(path: str | Path, data: dict[str, Any]) -> None:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+
+
+def camera_arrays(data: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    camera_matrix = np.asarray(data["camera_matrix"], dtype=np.float64)
+    distortion = np.asarray(data["distortion_coefficients"], dtype=np.float64)
+    return camera_matrix, distortion
+
+
+def chessboard_object_points(cols: int, rows: int, square_size_mm: float) -> np.ndarray:
+    points = np.zeros((rows * cols, 3), dtype=np.float32)
+    points[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
+    points[:, :2] *= square_size_mm
+    return points
+
+
+def find_chessboard(gray: np.ndarray, pattern: tuple[int, int]) -> tuple[bool, np.ndarray | None]:
+    # SB is more robust near image edges and already returns sub-pixel corners.
+    import cv2
+
+    if hasattr(cv2, "findChessboardCornersSB"):
+        sb_flags = cv2.CALIB_CB_NORMALIZE_IMAGE | cv2.CALIB_CB_EXHAUSTIVE
+        found, corners = cv2.findChessboardCornersSB(gray, pattern, sb_flags)
+        if found:
+            return True, corners.astype(np.float32)
+
+    flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
+    found, corners = cv2.findChessboardCorners(gray, pattern, flags)
+    if not found:
+        return False, None
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 40, 1e-3)
+    corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+    return True, corners
