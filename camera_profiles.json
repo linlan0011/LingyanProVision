@@ -1,0 +1,44 @@
+{
+  "schema": "lingyan.camera_profiles.v1",
+  "cameras": {
+    "sp3220l_1080p": {
+      "display_name": "SP3220L USB camera 1080p",
+      "capture_width": 1920,
+      "capture_height": 1080,
+      "rotation": "none",
+      "lens_model": "opencv_pinhole",
+      "default_index": 0,
+      "pixel_format": "MJPG",
+      "target_fps": 25.0,
+      "device_vid_pid": "1871:0501",
+      "notes": "Windows SP3220L; USB VID_1871 PID_0501; focus/zoom must remain fixed"
+    },
+    "usb0bda3035_1080p": {
+      "display_name": "USB Camera VID_0BDA PID_3035 1080p",
+      "capture_width": 1920,
+      "capture_height": 1080,
+      "rotation": "none",
+      "lens_model": "opencv_pinhole",
+      "default_index": 0,
+      "pixel_format": null,
+      "target_fps": 30.0,
+      "backend": "msmf",
+      "device_vid_pid": "0BDA:3035",
+      "fixed_controls": {
+        "camera.exposure": -5,
+        "video.brightness": 0,
+        "video.contrast": 40,
+        "video.hue": 0,
+        "video.saturation": 66,
+        "video.sharpness": 50,
+        "video.gamma": 350,
+        "video.backlight": 0,
+        "video.gain": 64
+      },
+      "automatic_controls": {
+        "video.white_balance": 6500
+      },
+      "notes": "Native driver advertises 1920x1080 MJPG 30fps. MSMF selects the stream and returns decoded frames; its FOURCC query is not the source codec. Focus/zoom not exposed; keep mechanical lens settings unchanged."
+    }
+  }
+}

@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from camera_orientation import ROTATION_CHOICES, rotate_frame
+from camera_profiles import CameraProfile, load_intrinsics, load_mount, load_profiles, verify_capture_format
 from field_zones import ZoneFileReader, matching_zones
 from pose_io import PoseFileReader
 from safety_identity import (DEFAULT_TEMPLATES, TemplateReader, active_templates,
@@ -51,17 +52,7 @@ class SceneRules:
     front_approx_ratio: float = 0.008
 
 
-@dataclass(frozen=True)
-class CameraProfile:
-    capture_width: int
-    capture_height: int
-    rotation: str
-
-
-CAMERA_PROFILES = {
-    "lingyan": CameraProfile(640, 480, "none"),
-    "seekfree": CameraProfile(768, 1024, "clockwise"),
-}
+CAMERA_PROFILES = load_profiles()
 
 
 # Keep the completed launch-side settings independent of the frontal view.
@@ -116,9 +107,17 @@ SEEKFREE_SCENE_RULES = {
     "front-facing": replace(FRONT_RULES, max_corner_angle=160.0, front_approx_ratio=0.006),
     "general": replace(GENERAL_RULES),
 }
+# First-pass HSV tuning from the 2026-10-02 live frame for the 1920x1080
+# Realtek USB camera. Its purple target is concentrated around H=126..141;
+# keep the established scene geometry rules unchanged for each detector mode.
+USB_0BDA_3035_SCENE_RULES = {
+    scene: replace(rules, h_low=120, h_high=150, s_min=55, v_min=25)
+    for scene, rules in SCENE_RULES.items()
+}
 CAMERA_SCENE_RULES = {
     "lingyan": SCENE_RULES,
     "seekfree": SEEKFREE_SCENE_RULES,
+    "usb0bda3035_1080p": USB_0BDA_3035_SCENE_RULES,
 }
 
 
@@ -126,16 +125,35 @@ def nothing(_: int) -> None:
     pass
 
 
-def open_camera(index: int, width: int, height: int) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-    if not cap.isOpened():
+def open_camera(index: int, width: int, height: int, *, fourcc=None, fps=None, profile=None) -> cv2.VideoCapture:
+    if profile is not None and profile.device_vid_pid:
+        from camera_controls import configure_controls
+        configure_controls(index, profile.device_vid_pid)
+    backend = profile.backend if profile is not None else "auto"
+    api = cv2.CAP_MSMF if backend == "msmf" else cv2.CAP_DSHOW
+    cap = cv2.VideoCapture(index, api)
+    if not cap.isOpened() and backend == "auto":
         cap.release()
         cap = cv2.VideoCapture(index)
     if not cap.isOpened():
         raise RuntimeError(f"cannot open camera index {index}")
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    if fps is not None:
+        cap.set(cv2.CAP_PROP_FPS, fps)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    # Setting resolution/FPS can rebuild the DSHOW media type, so FOURCC is last.
+    if fourcc is not None:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+    if profile is not None and (profile.fixed_controls or profile.automatic_controls):
+        try:
+            state = configure_controls(index, profile.device_vid_pid, profile.fixed_controls,
+                                       profile.automatic_controls)
+            print(f"fixed camera controls verified: {profile.device_vid_pid}, "
+                  f"{profile.fixed_controls}; automatic={profile.automatic_controls or {}}", flush=True)
+        except Exception:
+            cap.release()
+            raise
     return cap
 
 
