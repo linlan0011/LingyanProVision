@@ -13,14 +13,20 @@ from tkinter import messagebox
 
 from pose_io import read_pose
 from pose_map_gui import PoseMapApp, build_parser as pose_parser
+from camera_profiles import load_profiles
 
 PROJECT = Path(__file__).resolve().parent
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Start pose UI and live camera together")
-    parser.add_argument('--camera', choices=('lingyan', 'seekfree'), default='lingyan')
-    parser.add_argument('--index', type=int, default=0)
+    parser.add_argument('--camera', choices=load_profiles(), default='lingyan')
+    parser.add_argument('--index', type=int)
+    parser.add_argument('--ranging', action='store_true')
+    parser.add_argument('--target-z-mm', type=float)
+    parser.add_argument('--range-max-mm', type=float, default=2000.)
+    parser.add_argument('--range-inferred', action='store_true')
+    parser.add_argument('--association-output', type=Path)
     parser.add_argument('--pose-file', type=Path, default=PROJECT/'selected_pose.json')
     parser.add_argument('--zones-file', type=Path, default=PROJECT/'field_zones.json')
     parser.add_argument('--templates-file', type=Path, default=PROJECT/'safety_templates.json')
@@ -28,12 +34,25 @@ def build_parser():
 
 
 def vision_command(args, stop_file):
-    return [sys.executable, '-u', str(PROJECT/'purple_camera_segmentation.py'),
-            '--camera', args.camera, '--index', str(args.index), '--scene', 'auto',
+    command = [sys.executable, '-u', str(PROJECT/'purple_camera_segmentation.py'),
+            '--camera', args.camera, '--scene', 'auto',
             '--pose-file', str(args.pose_file.resolve()),
             '--zones-file', str(args.zones_file.resolve()),
             '--templates-file', str(args.templates_file.resolve()),
             '--stop-file', str(stop_file)]
+    if args.index is not None:
+        command.extend(('--index', str(args.index)))
+    if args.ranging:
+        if args.target_z_mm is None:
+            raise ValueError('实时测距需指定角点高度 --target-z-mm；地面点填 0')
+        command.extend(('--ranging', '--target-z-mm', str(args.target_z_mm),
+                        '--range-max-mm', str(args.range_max_mm)))
+        if args.range_inferred:
+            command.append('--range-inferred')
+        from pose_association import association_output_path
+        output = association_output_path(args.camera, args.association_output, args.pose_file)
+        command.extend(('--association-output', str(output)))
+    return command
 
 
 def stop_vision(process, stop_file):
@@ -54,6 +73,11 @@ def stop_vision(process, stop_file):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    association_output = None
+    if args.ranging:
+        from pose_association import association_output_path
+        association_output = association_output_path(args.camera, args.association_output, args.pose_file)
+    started_at = datetime.now().timestamp()
     ui_args = pose_parser().parse_args([
         '--output', str(args.pose_file.resolve()), '--zones', str(args.zones_file.resolve()),
         '--templates', str(args.templates_file.resolve()),
@@ -90,6 +114,10 @@ def main(argv=None):
             monitor_job = None
             code = process.poll()
             if code is None:
+                if association_output is not None:
+                    from pose_association import read_live_association
+                    app.set_live_association(read_live_association(
+                        association_output, args.camera, started_at, app.pose))
                 monitor_job = root.after(200, monitor)
             elif code == 0:
                 close_all()

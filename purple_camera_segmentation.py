@@ -1504,7 +1504,7 @@ def find_scene_inferred_corners(
 
 
 def identify_frame_corners(recognitions, safety_ranks, white_mask, mask, rules,
-                           templates, model, scene, pose=None):
+                           templates, model, scene, pose=None, calibrated_ranger=None):
     """Attach map IDs only to the detector's accepted visible/inferred corners."""
     segments_by_rank = {}
     if model is not None and white_mask is not None:
@@ -1526,14 +1526,21 @@ def identify_frame_corners(recognitions, safety_ranks, white_mask, mask, rules,
                 segments = all_segments if is_inferred and scene == "front-facing" else segments_by_rank.get(rank, [])
                 rays = directed_rays(point, segments, is_inferred, mask.shape[1], model) if model else ()
                 observations.append(CornerObservation(tuple(map(float, point)), is_inferred, rays, rank))
-    return associate_corners(observations, templates, model, pose=pose, image_width=mask.shape[1])
+    return associate_corners(observations, templates, model, pose=pose, image_width=mask.shape[1],
+                             calibrated_ranger=calibrated_ranger)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--camera", choices=CAMERA_PROFILES, default="lingyan",
                         help="camera-specific capture geometry and recognition rules")
-    parser.add_argument("--index", type=int, default=0)
+    parser.add_argument("--index", type=int)
+    parser.add_argument("--ranging", action="store_true", help="enable calibrated body-frame corner ranging")
+    parser.add_argument("--target-z-mm", type=float, help="required known corner height when ranging; ground=0")
+    parser.add_argument("--range-max-mm", type=float, default=2000., help="geometry distance limit, not validated accuracy range")
+    parser.add_argument("--range-inferred", action="store_true", help="also range inferred corners, explicitly labelled estimates")
+    parser.add_argument("--association-output", type=Path,
+                        help="read-only simulated pose / corner identity / range feedback file")
     parser.add_argument("--width", type=int, default=None,
                         help="override the camera profile's capture width")
     parser.add_argument("--height", type=int, default=None,
@@ -1561,13 +1568,49 @@ def main() -> int:
     parser.add_argument("--stop-file", type=Path, default=None,
                         help="launcher session stop signal; normally managed by run_app.py")
     args = parser.parse_args()
+    association_writer = None
+    association_report = None
+    if args.association_output is not None:
+        if not args.ranging:
+            parser.error("--association-output requires --ranging")
+        from pose_association import association_output_path, AssociationWriter
+        association_writer = AssociationWriter(association_output_path(
+            args.camera, args.association_output, args.pose_file))
+    ranger = None
+    if args.ranging:
+        if args.target_z_mm is None:
+            parser.error("--ranging requires an explicit --target-z-mm (ground corners: 0)")
+        from corner_ranging import CornerRanger
+        ranger = CornerRanger.from_camera(args.camera, target_z_mm=args.target_z_mm,
+                                         max_distance_mm=args.range_max_mm,
+                                         include_inferred=args.range_inferred)
+        print(f"body ranging enabled: camera={args.camera}, Z={args.target_z_mm:g}mm, "
+              f"limit={args.range_max_mm:g}mm; inferred={args.range_inferred}", flush=True)
     requested_scene = args.scene
     scene = requested_scene if requested_scene != "auto" else "front-facing"
     camera_profile = CAMERA_PROFILES[args.camera]
+    camera_index = args.index if args.index is not None else camera_profile.default_index
     capture_width = args.width if args.width is not None else camera_profile.capture_width
     capture_height = args.height if args.height is not None else camera_profile.capture_height
     rotation = args.rotate if args.rotate is not None else camera_profile.rotation
-    rules = CAMERA_SCENE_RULES[args.camera][scene]
+    if (capture_width, capture_height, rotation) != (
+        camera_profile.capture_width, camera_profile.capture_height, camera_profile.rotation
+    ):
+        raise ValueError("capture overrides differ from registered profile; select/register the matching camera mode")
+    rules_for_camera = CAMERA_SCENE_RULES.get(args.camera, SCENE_RULES)
+    rules = rules_for_camera[scene]
+
+    try:
+        load_intrinsics(args.camera)
+        intrinsic_status = "matched"
+    except (FileNotFoundError, ValueError) as error:
+        intrinsic_status = f"pending ({error})"
+    try:
+        load_mount(args.camera)
+        mount_status = "matched"
+    except (FileNotFoundError, ValueError) as error:
+        mount_status = f"pending/invalid ({error})"
+    print(f"selected camera calibration: intrinsics={intrinsic_status}; mount={mount_status}", flush=True)
 
     pose_reader = PoseFileReader(args.pose_file)
     zone_reader = ZoneFileReader(args.zones_file)
@@ -1582,12 +1625,18 @@ def main() -> int:
     }
     scene_settings = {}
 
-    cap = open_camera(args.index, capture_width, capture_height)
+    cap = open_camera(camera_index, capture_width, capture_height,
+                      fourcc=camera_profile.pixel_format, fps=camera_profile.target_fps, profile=camera_profile)
     ok, initial_frame = cap.read()
     if not ok or initial_frame is None:
         cap.release()
         raise RuntimeError("camera opened but did not provide a frame")
     actual_height, actual_width = initial_frame.shape[:2]
+    try:
+        verify_capture_format(cap, camera_profile)
+    except Exception:
+        cap.release()
+        raise
     if (actual_width, actual_height) != (capture_width, capture_height):
         cap.release()
         raise RuntimeError(
@@ -1598,13 +1647,13 @@ def main() -> int:
     display_height = actual_width if rotation in ("clockwise", "counterclockwise") else actual_height
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
     print(
-        f"camera={args.camera}, index={args.index}, raw={actual_width}x{actual_height}, "
+        f"camera={args.camera}, index={camera_index}, raw={actual_width}x{actual_height}, "
         f"rotation={rotation}, image={display_width}x{display_height}, "
         f"reported_fps={actual_fps:.2f}",
         flush=True,
     )
 
-    window = "Camera - Purple Segmentation"
+    window = "Camera - Purple Segmentation + Body Ranging" if ranger is not None else "Camera - Purple Segmentation"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, min(1280, display_width * 2), min(720, display_height))
     cv2.createTrackbar("H low", window, rules.h_low, 179, nothing)
@@ -1656,7 +1705,7 @@ def main() -> int:
                 if next_scene != scene:
                     scene_settings[scene] = {name: cv2.getTrackbarPos(name, window) for name in trackbar_fields}
                     scene = next_scene
-                    rules = CAMERA_SCENE_RULES[args.camera][scene]
+                    rules = rules_for_camera[scene]
                     settings = scene_settings.get(scene, {name: getattr(rules, field) for name, field in trackbar_fields.items()})
                     for name, value in settings.items():
                         cv2.setTrackbarPos(name, window, value)
@@ -1816,6 +1865,7 @@ def main() -> int:
             identities = identify_frame_corners(
                 recognitions, safety_ranks, white_mask, mask, rules,
                 identity_templates, template_model, scene, selected_pose,
+                ranger if args.ranging and args.target_z_mm == 0 else None,
             )
             overlay = frame.copy()
             for rank, (detection, visible_corners, inferred_corners) in enumerate(recognitions, start=1):
@@ -1869,16 +1919,6 @@ def main() -> int:
                     1,
                     cv2.LINE_AA,
                 )
-            if scene == "front-facing":
-                draw_completed_front_polygon(
-                    overlay, selected_contours, white_mask, mask, rules,
-                )
-                # Keep the corner type visible above the orange fitted lines.
-                for _, visible_corners, inferred_corners in recognitions:
-                    for point, _ in visible_corners:
-                        cv2.circle(overlay, tuple(map(int, point)), 6, (0, 255, 255), -1)
-                    for point, _ in inferred_corners:
-                        cv2.circle(overlay, tuple(map(int, point)), 7, (255, 0, 255), -1)
             for px, py in reference_points:
                 cv2.circle(overlay, (px, py), 11, (255, 255, 0), 3)
             mode_text = (
@@ -1889,8 +1929,6 @@ def main() -> int:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA)
             cv2.putText(overlay, "BLUE=purple contour  GREEN=valid white boundary", (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(overlay, "ORANGE=fitted/completed boundary", (10, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 165, 255), 1, cv2.LINE_AA)
             cv2.putText(overlay, "MAGENTA=inferred corner", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 0, 255), 1, cv2.LINE_AA)
             cv2.putText(overlay, "CYAN ring=position reference", (10, 110),
@@ -1930,30 +1968,33 @@ def main() -> int:
                 for point, _ in inferred_corners:
                     px, py = [int(value) for value in point]
                     cv2.circle(mask_bgr, (px, py), 6, (255, 0, 255), -1)
-            if scene == "front-facing":
-                draw_completed_front_polygon(
-                    mask_bgr, selected_contours, white_mask, mask, rules,
-                )
-                for _, corners, inferred_corners in recognitions:
-                    for point, _ in corners:
-                        cv2.circle(mask_bgr, tuple(map(int, point)), 5, (0, 255, 255), -1)
-                    for point, _ in inferred_corners:
-                        cv2.circle(mask_bgr, tuple(map(int, point)), 6, (255, 0, 255), -1)
             for px, py in reference_points:
                 cv2.circle(mask_bgr, (px, py), 11, (255, 255, 0), 3)
             cv2.putText(mask_bgr, "BLUE = segmented contour", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 0, 0), 2, cv2.LINE_AA)
             cv2.putText(mask_bgr, "GREEN = white-purple boundary", (10, 48),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 0), 1, cv2.LINE_AA)
-            cv2.putText(mask_bgr, "ORANGE = fitted/completed boundary", (10, 68),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 165, 255), 1, cv2.LINE_AA)
             cv2.putText(mask_bgr, "MAGENTA = inferred corner", (10, 88),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 0, 255), 1, cv2.LINE_AA)
             cv2.putText(mask_bgr, "CYAN ring = position reference", (10, 108),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 0), 1, cv2.LINE_AA)
             overlay = draw_identity_overlay(overlay, identities, identity_templates, identity_status)
             mask_bgr = draw_identity_overlay(mask_bgr, identities, identity_templates, identity_status)
+            range_readings = []
+            if ranger is not None:
+                from corner_ranging import draw_range_tags, append_range_panel
+                range_readings = ranger.measure(recognitions, identities)
+                draw_range_tags(overlay, range_readings)
             preview = np.hstack((overlay, mask_bgr))
+            if ranger is not None:
+                preview = append_range_panel(preview, ranger, range_readings)
+            if ranger is not None:
+                from pose_association import association_payload
+                association_report = association_payload(args.camera, frame_count, ranger, range_readings,
+                                                         selected_pose, identities, identity_templates,
+                                                         scene, args.pose_file)
+                if association_writer is not None:
+                    association_writer.write(association_report)
             cv2.imshow(window, preview)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("s"):
@@ -1961,9 +2002,31 @@ def main() -> int:
                 output_dir.mkdir(parents=True, exist_ok=True)
                 raw_path = output_dir / f"latest_live_raw_{args.camera}.png"
                 preview_path = output_dir / f"latest_live_preview_{args.camera}.png"
-                cv2.imwrite(str(raw_path), frame)
-                cv2.imwrite(str(preview_path), preview)
+                if ranger is not None:
+                    from corner_ranging import save_range_image
+                    save_range_image(raw_path, frame)
+                    save_range_image(preview_path, preview)
+                else:
+                    cv2.imwrite(str(raw_path), frame)
+                    cv2.imwrite(str(preview_path), preview)
                 print(f"saved {raw_path} and {preview_path}", flush=True)
+                if ranger is not None:
+                    from corner_ranging import range_payload
+                    from calibration.calibration_io import save_result_json
+                    from datetime import datetime, timezone
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    snapshot = output_dir / f"corner_ranges_{args.camera}_{stamp}.json"
+                    snapshot_raw = snapshot.with_suffix(".raw.png")
+                    snapshot_preview = snapshot.with_suffix(".preview.png")
+                    save_range_image(snapshot_raw, frame)
+                    save_range_image(snapshot_preview, preview)
+                    payload = range_payload(args.camera, frame_count, ranger, range_readings)
+                    payload["pose_association"] = association_report
+                    payload["created_utc"] = datetime.now(timezone.utc).isoformat()
+                    payload["raw_image"] = str(snapshot_raw)
+                    payload["preview_image"] = str(snapshot_preview)
+                    save_result_json(snapshot, payload)
+                    print(f"saved {snapshot}", flush=True)
             if key in (27, ord("q")):
                 break
     finally:

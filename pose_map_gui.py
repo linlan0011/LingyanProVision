@@ -102,6 +102,7 @@ class PoseMapApp:
         self.template_model = self.template_reader.poll()
         self.transform = CoordinateTransform(args.x_min, args.x_max, args.y_min, args.y_max)
         self.pose = Pose2D(args.x, args.y, args.heading).validated()
+        self.live_association = None
         self.map_path: Optional[Path] = None
         self.map_image: Optional[np.ndarray] = None
         self.field_pixels: Optional[tuple[float, float, float, float]] = None
@@ -129,6 +130,7 @@ class PoseMapApp:
         self.output_var = tk.StringVar(value=str(self.output_path))
         self.zone_mode_var = tk.StringVar(value="模式：选择位姿")
         self.identity_var = tk.StringVar(value="安全区：上方 1，下方 2；从地图左上角顺时针编号")
+        self.live_identity_var = tk.StringVar(value="视觉回传：等待相机；不修改仿真位姿")
         self.zone_vars = {
             key: tk.StringVar() for key in (
                 "name", "x_min_mm", "x_max_mm", "y_min_mm", "y_max_mm",
@@ -226,6 +228,10 @@ class PoseMapApp:
         ttk.Button(side, text="立即输出给识别程序", command=self.publish_pose).grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=(0, 12)
         )
+        row += 1
+        ttk.Label(side, textvariable=self.live_identity_var, wraplength=255,
+                  justify="left", foreground="#087f23").grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
         row += 1
         ttk.Button(side, text="识别情境分区管理…", command=self.open_zone_manager).grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=(0, 4)
@@ -504,6 +510,47 @@ class PoseMapApp:
         self.canvas.create_oval(px - 7, py - 7, px + 7, py + 7, fill="#ff3b30", outline="white", width=2, tags="pose")
         self.canvas.create_line(px, py, end_x, end_y, fill="#ff3b30", width=4, arrow=tk.LAST, arrowshape=(13, 16, 6), tags="pose")
         self.canvas.create_text(px + 10, py + 12, text=f"({self.pose.x_mm:.1f}, {self.pose.y_mm:.1f}, {self.pose.heading_deg:.1f}°)", fill="#ff3b30", anchor="nw", font=("Microsoft YaHei UI", 10, "bold"), tags="pose")
+        self._draw_live_identity()
+
+    def set_live_association(self, data) -> None:
+        """Display camera feedback only; never update or publish a vehicle pose."""
+        self.live_association = data
+        self._draw_live_identity()
+
+    def _draw_live_identity(self) -> None:
+        from pose_association import report_matches_pose
+        self.canvas.delete("live_identity")
+        data = self.live_association
+        if data is None or not report_matches_pose(data, self.pose):
+            self.live_identity_var.set("视觉回传：等待当前位姿的识别结果")
+            return
+        ids = data.get("confirmed_corner_ids", [])
+        summary = ["视觉编号：" + ("、".join(ids) if ids else "?（未确认）")]
+        if not data.get("calibration_valid"):
+            summary.append("标定已变更，测距停用")
+        else:
+            measured = [r for r in data.get("corners", [])
+                        if r.get("valid") and not r.get("inferred") and r.get("corner_id")]
+            for r in measured[:2]:
+                summary.append(f'{r["corner_id"]}：r={r["distance_mm"]:.1f} mm（车体）')
+            if not measured:
+                summary.append("无已编号的直接可见测距点")
+        self.live_identity_var.set("\n".join(summary))
+        if self.template_model is None:
+            return
+        inferred = {r["corner_id"] for r in data.get("identities", []) if r.get("inferred")}
+        for zone in self.template_model["safety_zones"]:
+            for index, (x, y) in enumerate(map_corners(zone), 1):
+                corner_id = f'{zone["id"]}.{index}'
+                if corner_id not in ids:
+                    continue
+                px, py = self.transform.world_to_canvas(x, y)
+                color = "#ffa000" if corner_id in inferred else "#00cc66"
+                self.canvas.create_oval(px-11, py-11, px+11, py+11, outline=color,
+                                        width=3, tags="live_identity")
+                label = corner_id + (" 推断" if corner_id in inferred else " 视觉")
+                self.canvas.create_text(px+13, py-15, text=label, fill=color,
+                                        anchor="w", tags="live_identity")
 
     def _manual_pose_changed(self, *_: object) -> None:
         if self._updating_entries:

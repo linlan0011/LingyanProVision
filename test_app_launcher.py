@@ -74,6 +74,61 @@ while not stop_path.exists():
             self.assertIn({'x':2200.0,'corner':'2.2'},rows)
             self.assertEqual(proc_holder[0].poll(),0)
 
+    def test_ranging_feedback_round_trip_does_not_correct_ui_pose(self):
+        import pose_association
+        child_code = '''
+from pathlib import Path
+import sys, time
+from pose_io import PoseFileReader
+from pose_association import AssociationWriter, association_payload
+from test_corner_ranging import fixture
+from safety_identity import CornerObservation, CornerIdentity
+pose_path, feedback_path, stop_path = map(Path,sys.argv[1:])
+reader=PoseFileReader(pose_path)
+writer=AssociationWriter(feedback_path)
+ranger=fixture()
+while not stop_path.exists():
+    pose=reader.poll()
+    if pose is not None:
+        identity=CornerIdentity(CornerObservation((320.,360.),False,()),{'1.3'},'1.3')
+        readings=ranger.measure([(None,[((320.,360.),90.)],[])],[identity])
+        writer.write(association_payload('usb0bda3035_1080p',1,ranger,readings,pose,[identity]))
+    time.sleep(.04)
+'''
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(pose_association, 'PROJECT', Path(directory)):
+            pose_path = Path(directory)/'pose.json'
+            write_pose_atomic(pose_path, Pose2D(1500,2100,90))
+            output = pose_association.association_output_path('usb0bda3035_1080p')
+            received = []
+            actual_ui = run_app.PoseMapApp
+            def create_ui(root,args):
+                root.withdraw()
+                app = actual_ui(root,args)
+                actual_feedback = app.set_live_association
+                def display(data):
+                    if data is not None:
+                        before = pose_path.read_bytes()
+                        prior = app.pose
+                        actual_feedback(data)
+                        self.assertEqual(app.pose, prior)
+                        self.assertEqual(pose_path.read_bytes(), before)
+                        self.assertIn('1.3', app.live_identity_var.get())
+                        received.append(prior.x_mm)
+                    else:
+                        actual_feedback(data)
+                app.set_live_association = display
+                root.after(700, lambda: app._set_pose(Pose2D(2200,200,180),'test input update'))
+                root.after(1800, lambda: root.tk.call(root.protocol('WM_DELETE_WINDOW')))
+                return app
+            with patch.object(run_app,'PoseMapApp',side_effect=create_ui), \
+                    patch.object(run_app,'vision_command',side_effect=lambda args,stop:
+                        [sys.executable,'-u','-c',child_code,str(pose_path),str(output),str(stop)]):
+                self.assertEqual(run_app.main(['--camera','usb0bda3035_1080p',
+                    '--ranging','--target-z-mm','0','--pose-file',str(pose_path)]),0)
+            self.assertIn(1500., received)
+            self.assertIn(2200., received)
+
 
 if __name__=='__main__':
     unittest.main()

@@ -290,7 +290,7 @@ def diagonal_extrema_candidates(observations, templates):
     return candidates
 
 
-def associate_corners(observations, templates, model, pose=None, image_width=None):
+def associate_corners(observations, templates, model, pose=None, image_width=None, calibrated_ranger=None):
     results = []
     if model is None:
         return [CornerIdentity(o, reason="template file unavailable") for o in observations]
@@ -310,9 +310,12 @@ def associate_corners(observations, templates, model, pose=None, image_width=Non
             result.candidates.add(extrema_matches[observation_index])
         else:
             for template in projection_templates:
-                result.candidates.update(projected_corner_candidates(
-                    observation, template, pose, image_width, model,
-                ))
+                if calibrated_ranger is not None:
+                    result.candidates.update(calibrated_ranger.identity_candidates(observation, template, pose, model))
+                else:
+                    result.candidates.update(projected_corner_candidates(
+                        observation, template, pose, image_width, model,
+                    ))
         for a, b in combinations(observation.rays, 2):
             separation = abs(normalize_heading_deg(a-b))
             if not model["minimum_pair_angle_deg"] <= separation <= 180-model["minimum_pair_angle_deg"]:
