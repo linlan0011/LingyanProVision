@@ -2,6 +2,75 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Camera: list registered profiles",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "camera_profiles", "list"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Camera: probe actual resolution",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.probe_camera", "--index", "${input:cameraIndex}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: capture selected camera chessboard",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.capture_chessboard", "--camera", "${input:cameraId}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: capture selected camera validation",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.capture_chessboard", "--camera", "${input:cameraId}",
+                     "--output", "calibration/data/${input:cameraId}/validation"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: solve selected camera intrinsics",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.calibrate_intrinsics", "--camera", "${input:cameraId}",
+                     "--square-mm", "${input:chessboardSquareMm}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: validate selected camera intrinsics",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.validate_intrinsics", "--camera", "${input:cameraId}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: collect selected camera mount points",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.collect_mount_points", "--camera", "${input:cameraId}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: fit selected camera mount pose",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.fit_mount_pose", "--camera", "${input:cameraId}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: collect selected camera ranging validation",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.collect_mount_points", "--camera", "${input:cameraId}",
+                     "--purpose", "validation"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Calibration: validate selected camera ranging",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.validate_ranging", "--camera", "${input:cameraId}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
+            "label": "Run recognition with selected camera",
+            "type": "process", "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["${workspaceFolder}\\run_app.py", "--camera", "${input:cameraId}"],
+            "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []
+        },
+        {
             "label": "Run full app (pose UI + live camera)",
             "type": "process",
             "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
@@ -239,6 +308,33 @@
             "problemMatcher": []
         },
         {
+            "label": "Calibration: collect mount points (LINGYAN)",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.collect_mount_points"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: collect range validation points (LINGYAN)",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.collect_mount_points", "--purpose", "validation"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: validate ranging",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.validate_ranging"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
             "label": "Calibration: fit mount pose",
             "type": "process",
             "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
@@ -255,9 +351,130 @@
                 "clear": true
             },
             "problemMatcher": []
+        },
+        {
+            "label": "Camera: probe actual modes",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.probe_camera", "--index", "${input:cameraIndex}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Camera: run selected profile recognition",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["${workspaceFolder}\\purple_camera_segmentation.py", "--camera", "${input:calibrationCameraId}", "--scene", "auto"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Camera: run full app with selected profile",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["${workspaceFolder}\\run_app.py", "--camera", "${input:calibrationCameraId}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: capture selected camera chessboard",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.capture_chessboard", "--camera", "${input:calibrationCameraId}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: capture selected camera validation images",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.capture_chessboard", "--camera", "${input:calibrationCameraId}", "--output", "calibration/data/${input:calibrationCameraId}/validation"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: solve selected camera intrinsics",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.calibrate_intrinsics", "--camera", "${input:calibrationCameraId}", "--square-mm", "${input:chessboardSquareMm}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: validate selected camera intrinsics",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.validate_intrinsics", "--camera", "${input:calibrationCameraId}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: collect selected camera mount points",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.collect_mount_points", "--camera", "${input:calibrationCameraId}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: fit selected camera mount pose",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.fit_mount_pose", "--camera", "${input:calibrationCameraId}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: collect selected camera ranging checks",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.collect_mount_points", "--camera", "${input:calibrationCameraId}", "--purpose", "validation"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "Calibration: validate selected camera ranging",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "calibration.validate_ranging", "--camera", "${input:calibrationCameraId}"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
         }
     ],
     "inputs": [
+        {
+            "id": "calibrationCameraId",
+            "type": "promptString",
+            "description": "输入已注册相机 ID，例如 lingyan；用 python -m camera_profiles list 查看列表",
+            "default": "lingyan"
+        },
+        {
+            "id": "cameraIndex",
+            "type": "promptString",
+            "description": "USB 摄像头索引",
+            "default": "0"
+        },
+        {
+            "id": "cameraId", "type": "promptString",
+            "description": "输入已登记相机 ID（如 lingyan、seekfree 或新相机 ID）",
+            "default": "lingyan"
+        },
+        {
+            "id": "cameraIndex", "type": "promptString",
+            "description": "输入待探测摄像头设备序号",
+            "default": "0"
+        },
         {
             "id": "chessboardSquareMm",
             "type": "promptString",
