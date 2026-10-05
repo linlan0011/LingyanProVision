@@ -1,5 +1,23 @@
 # Lingyan Pro Vision
 
+多相机标定与切换见[多相机独立标定与切换](doc/多相机独立标定与切换.md)。新相机先用 `python -m calibration.probe_camera` 查实际模式，随后用 `python -m camera_profiles add` 注册独立 ID。标定照片、点位和结果都按 ID 分目录；运行识别可使用 `--camera <ID>`。灵眼既有数据已单独归档，尚需重新拟合有效的安装外参。
+
+## 多相机标定与切换
+
+灵眼旧版标定照片、内参、外参和验证数据保留在 `calibration/data/lingyan/` 与
+`calibration/results/lingyan/`；切换相机时用独立 ID 和目录。运行
+`python -m camera_profiles list` 查看已登记模式和参数状态。
+新相机的分辨率要以实际返回的帧为准，可用
+`python -m calibration.probe_camera --index 0` 检查。确认后登记新 ID，
+再分别采棋盘、解内参、采安装点、解外参、独立验证。每个 ID 固定一台物理设备及其
+分辨率、镜头焦点、旋转方向和镜头模型；其中任一项改变需另建 ID。
+使用方法见[多相机标定流程](doc/多相机标定与选择.md)。
+
+识别可运行 `python run_app.py --camera 相机ID`，或者
+`python purple_camera_segmentation.py --camera 相机ID --scene auto`。
+程序核对所选参数的相机 ID、图像尺寸与镜头模型，并提示内外参状态。
+灵眼旧外参结果来自占位像素，尚未通过有效性检查；仅其内参可作为当前已校准结果。
+
 This is a standalone VS Code project for testing the purple safety-zone detector.
 The current camera choice is the original LINGYAN Pro at 640 x 480 without
 rotation. The SeekFree 彩钻风 Pro remains an explicit alternative profile.
@@ -26,6 +44,12 @@ Ctrl+Shift+B 的默认任务也会启动整套程序。
 更换摄像头序号可运行 `run_app.py --index 1`；SeekFree 使用 `--camera seekfree`。
 
 ## 场地地图位姿选择器
+
+装车外参的地面标记采点不是地图选点。请双击 `start_calibration_points.cmd`，
+或运行任务 **Calibration: collect mount points (LINGYAN)**。
+它使用原灵眼 640×480 原图：冻结画面、鼠标点选十字中心、填写实测车体系坐标、
+添加并导出 `mount_points.csv`。不自动识别任意标记，也不修改内参。
+详见[标定点采集说明](doc/标定点采集工具说明.md)。
 
 运行 `pose_map_gui.py`，或在 VS Code 中选择 **Field map pose selector**。
 程序会自动加载 `照片/field_map.png`：
@@ -338,6 +362,19 @@ py -m venv .venv
 The project is independent of the STM32 firmware checkout.
 
 ## Camera calibration and metric ranging
+
+多点几何误差检验：双击 `start_geometry_validation.cmd`，采集多个点后点击“查看全部点误差”。
+原 `calibration.validate_ranging` 现输出逐点表、整体 RMSE/P95、分距离统计和 JSON/TXT，支持合并指定的多轮 CSV。
+使用说明见 [多点几何测距误差检验](doc/多点几何测距误差检验.md)。
+
+地图仿真位姿辅助角点编号与实时测距：
+
+```powershell
+& ".\start_app.cmd" --camera usb0bda3035_1080p --ranging --target-z-mm 0
+```
+
+也可双击 `start_sim_pose_ranging.cmd`。相机反馈只显示编号和车体测距，不修改地图车辆位姿。
+操作说明见 [仿真位姿辅助角点识别与测距](doc/仿真位姿辅助角点识别与测距.md)。
 
 The project includes a calibration workflow under `calibration/`, now defaulting
 to the original LINGYAN Pro 640 x 480 camera with no rotation. A print-ready
