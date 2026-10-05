@@ -4,57 +4,59 @@ import argparse
 import csv
 from pathlib import Path
 
-import numpy as np
+from calibration.calibration_io import validate_point_sources
+from calibration.ranging_report import build_camera_report, render_report, save_reports
+from camera_profiles import isolated_path, load_profiles, file_sha256
 
-from calibration.calibration_io import camera_arrays, load_json, save_json
-from calibration.ground_project import pixel_to_body_plane
+
+def read_records(paths, camera):
+    records, sources = [], []
+    if len(set(paths)) != len(paths):
+        raise ValueError("the same input CSV was specified more than once")
+    for path in paths:
+        digest = file_sha256(path)
+        validate_point_sources(path, camera)
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            required = {"x_mm", "y_mm", "z_mm", "u_px", "v_px"}
+            if not required.issubset(reader.fieldnames or ()):
+                raise ValueError(f"{path}: CSV must contain {', '.join(sorted(required))}")
+            count = 0
+            for index, row in enumerate(reader, 1):
+                records.append({**row, "source_file": str(path), "source_row": index})
+                count += 1
+        if not count:
+            raise ValueError(f"{path}: validation CSV contains no points")
+        if file_sha256(path) != digest:
+            raise ValueError(f"{path}: CSV changed during reading; retry validation")
+        sources.append({"file": str(path), "sha256": digest, "point_count": count})
+    return records, sources
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Compare plane-intersection ranging with surveyed points.")
-    parser.add_argument("--intrinsics", type=Path, default=Path("calibration/results/lingyan/intrinsics.json"))
-    parser.add_argument("--mount", type=Path, default=Path("calibration/results/lingyan/mount_pose.json"))
-    parser.add_argument("--points", type=Path, default=Path("calibration/data/lingyan/range_validation.csv"))
-    parser.add_argument("--output", type=Path, default=Path("calibration/results/lingyan/range_validation.json"))
-    args = parser.parse_args()
-
-    intrinsics = load_json(args.intrinsics)
-    mount = load_json(args.mount)
-    camera_matrix, distortion = camera_arrays(intrinsics)
-    rotation_bc = np.asarray(mount["rotation_camera_to_body"], dtype=np.float64)
-    position_b = np.asarray(mount["camera_position_body_mm"], dtype=np.float64)
-    rows = []
-    with args.points.open("r", encoding="utf-8-sig", newline="") as stream:
-        for index, row in enumerate(csv.DictReader(stream), start=1):
-            expected = np.array([float(row[k]) for k in ("x_mm", "y_mm", "z_mm")])
-            pixel = (float(row["u_px"]), float(row["v_px"]))
-            predicted = pixel_to_body_plane(
-                pixel, expected[2], camera_matrix, distortion, rotation_bc, position_b,
-            )
-            error_xy = predicted[:2] - expected[:2]
-            rows.append({
-                "row": index,
-                "expected_body_mm": expected.tolist(),
-                "pixel": list(pixel),
-                "predicted_body_mm": predicted.tolist(),
-                "x_error_mm": float(error_xy[0]),
-                "y_error_mm": float(error_xy[1]),
-                "horizontal_error_mm": float(np.linalg.norm(error_xy)),
-            })
-    if not rows:
-        raise ValueError("validation CSV contains no points")
-    errors = np.array([row["horizontal_error_mm"] for row in rows])
-    result = {
-        "schema": "lingyan.range_validation.v1",
-        "mean_horizontal_error_mm": float(np.mean(errors)),
-        "median_horizontal_error_mm": float(np.median(errors)),
-        "max_horizontal_error_mm": float(np.max(errors)),
-        "points": rows,
-    }
-    save_json(args.output, result)
-    print(f"saved {args.output}")
-    print(f"count={len(rows)}, mean={np.mean(errors):.1f} mm, "
-          f"median={np.median(errors):.1f} mm, max={np.max(errors):.1f} mm")
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Per-point and overall geometry ranging error report.")
+    parser.add_argument("--camera", choices=load_profiles(), default="lingyan")
+    parser.add_argument("--points", type=Path, nargs="+", help="one or more CSVs in this camera's data directory")
+    parser.add_argument("--output", type=Path, help="JSON report; matching TXT is also saved")
+    parser.add_argument("--range-max-mm", type=float, default=2000.)
+    parser.add_argument("--min-plane-angle-deg", type=float, default=3.)
+    parser.add_argument("--max-error-mm", type=float, help="optional horizontal-position error pass threshold")
+    parser.add_argument("--bin-mm", type=float, default=300., help="reference horizontal-distance grouping width")
+    args = parser.parse_args(argv)
+    paths = [isolated_path(p, args.camera, result=False, default_name="range_validation.csv")
+             for p in (args.points or [None])]
+    output = isolated_path(args.output, args.camera, result=True, default_name="range_validation.json")
+    records, sources = read_records(paths, args.camera)
+    result = build_camera_report(args.camera, records, max_distance_mm=args.range_max_mm,
+                                 min_plane_angle_deg=args.min_plane_angle_deg,
+                                 error_limit_mm=args.max_error_mm, bin_mm=args.bin_mm)
+    result["input_files"] = sources
+    output, txt, backup, txt_backup = save_reports(output, result)
+    print(render_report(result), end="")
+    print(f"saved {output}\nsaved {txt}")
+    for previous in (backup, txt_backup):
+        if previous:
+            print(f"previous report backed up to {previous}")
     return 0
 
 
