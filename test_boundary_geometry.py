@@ -181,6 +181,95 @@ class BoundaryGeometryTests(unittest.TestCase):
             self.assertTrue(any(np.linalg.norm(p - target) <= 3.
                                 for p, _ in result.visible), (tolerance, result.visible))
 
+    def test_thin_white_halo_does_not_turn_occluder_into_green(self):
+        purple = rectangle()
+        white = cv2.bitwise_not(purple)
+        cv2.rectangle(purple, (460, 350), (540, 440), 0, -1)
+        cv2.rectangle(white, (460, 350), (540, 440), 0, -1)
+        # Only a 3 px pale band at the contact; the object behind it is coloured.
+        cv2.rectangle(white, (460, 350), (462, 400), 255, -1)
+        cv2.rectangle(white, (460, 350), (500, 352), 255, -1)
+        result = detect(purple, white)
+        self.assertEqual(len(result.visible), 3)
+        self.assert_corners(result, [(500, 400)], inferred=True)
+        for boundary in result.boundaries:
+            points = boundary.raw_points
+            contact = (((points[:, 0] == 459) & (points[:, 1] > 360))
+                       | ((points[:, 1] == 349) & (points[:, 0] > 470)))
+            self.assertFalse(boundary.valid[contact].any())
+
+    def test_single_white_ray_is_not_an_adjacent_white_region(self):
+        purple = rectangle()
+        white = np.zeros_like(purple)
+        white[250, 501:520] = 255
+        result = detect(purple, white)
+        self.assertFalse(any(b.valid.any() for b in result.boundaries))
+
+    def test_white_beyond_coloured_gap_is_not_evidence(self):
+        purple = rectangle()
+        white = cv2.bitwise_not(purple)
+        white[90:411, 501:504] = 0  # White resumes inside the wider search band.
+        result = detect(purple, white)
+        boundary = result.boundaries[0]
+        right = (boundary.raw_points[:, 0] == 500) & (boundary.raw_points[:, 1] > 120) & (boundary.raw_points[:, 1] < 380)
+        self.assertFalse(boundary.valid[right].any())
+
+    def test_near_white_cannot_bridge_two_pixel_coloured_gap(self):
+        purple = rectangle()
+        white = cv2.bitwise_not(purple)
+        white[90:411, 503:505] = 0  # 1/2 px white, 3/4 px coloured, then white.
+        result = detect(purple, white)
+        boundary = result.boundaries[0]
+        middle = (boundary.raw_points[:, 0] == 500) & (boundary.raw_points[:, 1] > 120) & (boundary.raw_points[:, 1] < 380)
+        self.assertFalse(boundary.valid[middle].any())
+
+    def test_isolated_sample_noise_does_not_erase_a_white_strip(self):
+        purple = rectangle()
+        white = cv2.bitwise_not(purple)
+        white[90:411, 503] = 0  # One isolated failed sample, surrounded by white.
+        result = detect(purple, white)
+        boundary = result.boundaries[0]
+        middle = (boundary.raw_points[:, 0] == 500) & (boundary.raw_points[:, 1] > 120) & (boundary.raw_points[:, 1] < 380)
+        self.assertTrue(boundary.valid[middle].all())
+
+    def test_pale_blue_face_requires_neutral_core_and_recovers_hidden_corner(self):
+        import purple_camera_segmentation as vision
+        for mirrored in (False, True):
+            for scene in ('front-facing', 'general'):
+                frame = np.full((480, 640, 3), 235, np.uint8)
+                cv2.rectangle(frame, (100, 100), (500, 400), (140, 30, 140), -1)
+                blue = cv2.cvtColor(np.uint8([[[100, 75, 218]]]), cv2.COLOR_HSV2BGR)[0, 0]
+                cv2.rectangle(frame, (460, 350), (540, 440), tuple(map(int, blue)), -1)
+                if mirrored:
+                    frame = cv2.flip(frame, 1)
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                rules = vision.USB_0BDA_3035_SCENE_RULES[scene]
+                purple = cv2.inRange(hsv, (120, 55, 25), (150, 255, 255))
+                white = vision.make_white_field_mask(hsv, rules.white_s_max, 100)
+                core = vision.make_white_core_mask(hsv, rules.white_s_max, 100)
+                self.assertGreater(int(white[380, 159 if mirrored else 480]), 0)
+                self.assertEqual(int(core[380, 159 if mirrored else 480]), 0)
+                contours, _ = cv2.findContours(purple, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                visible, inferred = vision.find_effective_boundary_corners(
+                    contours, white, purple, rules, white_core_mask=core)
+                self.assertEqual(len(visible), 3, (scene, mirrored, visible))
+                self.assertEqual(len(inferred), 1)
+                target = np.array((139, 400) if mirrored else (500, 400))
+                self.assertLessEqual(np.linalg.norm(inferred[0][0] - target), 3.)
+
+    def test_dim_cool_white_floor_keeps_all_visible_corners(self):
+        import purple_camera_segmentation as vision
+        colour = cv2.cvtColor(np.uint8([[[100, 35, 90]]]), cv2.COLOR_HSV2BGR)[0, 0]
+        frame = np.full((480, 640, 3), colour, np.uint8)
+        cv2.rectangle(frame, (100, 100), (500, 400), (140, 30, 140), -1)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        purple = cv2.inRange(hsv, (120, 55, 25), (150, 255, 255))
+        white = vision.make_white_field_mask(hsv, 80, 100)
+        core = vision.make_white_core_mask(hsv, 80, 100)
+        contours, _ = cv2.findContours(purple, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        result = detect_boundaries(contours, white, purple, white_core_mask=core)
+        self.assert_corners(result, [(100, 100), (500, 100), (500, 400), (100, 400)])
+
 
 if __name__ == '__main__':
     unittest.main()

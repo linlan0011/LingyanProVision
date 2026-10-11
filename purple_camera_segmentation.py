@@ -261,6 +261,16 @@ def make_white_field_mask(hsv: np.ndarray, s_max: int, v_min: int) -> np.ndarray
     return ((bright | dim_neutral) & neutral_or_cool).astype(np.uint8) * 255
 
 
+def make_white_core_mask(hsv: np.ndarray, s_max: int, v_min: int) -> np.ndarray:
+    """Neutral colour evidence for the adjacent strip in front/general modes.
+
+    Keep the loose field segmentation for mixed edge pixels; require a neutral
+    core within the same contiguous strip so a pale blue face cannot support it
+    merely by passing the loose S<=80 (or S<=179) threshold.
+    """
+    return make_white_field_mask(hsv, min(s_max, 50), v_min)
+
+
 def region_mask_for_contour(
     contour: np.ndarray,
     image_shape: tuple[int, ...],
@@ -1039,6 +1049,7 @@ def find_effective_boundary_corners(
     corner_supports: Optional[dict] = None,
     boundary_result: Optional[dict] = None,
     point_geometry: Optional[PointGeometry] = None,
+    white_core_mask: Optional[np.ndarray] = None,
 ) -> tuple[list[tuple[np.ndarray, float]], list[tuple[np.ndarray, float]]]:
     """Ordered purple/white observations -> multiple robust lines -> corners.
 
@@ -1056,7 +1067,8 @@ def find_effective_boundary_corners(
         infer_corners=rules.infer_hidden_corners,
         point_geometry=point_geometry,
     )
-    result = detect_boundaries(contours, white_mask, purple_mask, config)
+    result = detect_boundaries(contours, white_mask, purple_mask, config,
+                               white_core_mask=white_core_mask)
     if corner_supports is not None:
         corner_supports.update(result.corner_supports)
     if boundary_result is not None:
@@ -1802,6 +1814,7 @@ def main() -> int:
 
             color_mode = frame.ndim == 3 and frame.shape[2] >= 3
             white_mask: Optional[np.ndarray] = None
+            white_core_mask: Optional[np.ndarray] = None
             if color_mode:
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
                 h_low = parameters.get("H low")
@@ -1821,6 +1834,8 @@ def main() -> int:
                     m2 = cv2.inRange(hsv, (h_low, s_min, v_min), (179, 255, 255))
                     mask = cv2.bitwise_or(m1, m2)
                 white_mask = make_white_field_mask(hsv, white_s_max, white_v_min)
+                if scene in ("front-facing", "general"):
+                    white_core_mask = make_white_core_mask(hsv, white_s_max, white_v_min)
             else:
                 gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 # Grayscale fallback can only find a brightness range; it cannot
@@ -1877,6 +1892,7 @@ def main() -> int:
                     corner_supports=frame_corner_supports,
                     boundary_result=frame_boundary_result,
                     point_geometry=point_geometry,
+                    white_core_mask=white_core_mask,
                 )
                 recognitions = [
                     (detection, [], [])

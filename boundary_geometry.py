@@ -53,6 +53,12 @@ class BoundaryConfig:
     minimum_turn_deg: float = 5.0
     infer_corners: bool = True
     point_geometry: PointGeometry | None = None
+    # Minimum evidence width in source pixels, not a physical floor distance.
+    # Keep it local: perspective or printed floor markings can limit the strip.
+    white_band_depth_px: float = 5.0
+    white_band_half_width_px: float = 0.0
+    minimum_white_lanes: float = 0.6
+    minimum_white_core_support: float = 0.6
 
 
 @dataclass
@@ -140,7 +146,44 @@ def _dense_contour(contour):
     return max(contours, key=cv2.contourArea).reshape(-1, 2).astype(float) + shift
 
 
-def observe_boundary(contour, purple, white, config):
+def _white_band_evidence(points, tangent, normals, purple, white, core, config):
+    """Validate an adjacent white strip; never search past a coloured gap.
+
+    Five parallel outward rays measure both along-edge continuity and width.
+    The first pixel may be mixed purple/background. Beyond it allow isolated
+    sampling noise, but never a two-pixel coloured gap. A neutral colour core
+    must occupy most of the outer half of that same strip.
+    """
+    scale = min(white.shape) / 480.
+    depth = max(4, round(config.white_band_depth_px))
+    half_width = config.white_band_half_width_px or max(1., min(6., 2. * scale))
+    lateral = np.linspace(-half_width, half_width, 5)
+    offsets = np.arange(1., depth + 1.)
+    samples = (points[:, None, None, :]
+               + lateral[None, :, None, None] * tangent[:, None, None, :]
+               + offsets[None, None, :, None] * normals[:, None, None, :])
+    votes = _sample(white, samples) & ~_sample(purple, samples)
+    core_votes = _sample(core, samples) & votes
+    # Tight adjacency is checked separately at the actual centre contour point.
+    # A tangent-offset ray can start on a different pixel staircase; evaluate
+    # its width from 3 px out rather than eroding otherwise valid curved runs.
+    # Permit one isolated failed sample even in a short strip. A percentage
+    # alone rounds this allowance to zero at 5 px and fragments clean edges.
+    noise_budget = max(1, int(.2 * (depth - 2)))
+    continuous = (((~votes[:, :, 2:]).sum(axis=2) <= noise_budget)
+                  & ~(~votes[:, :, 2:-1] & ~votes[:, :, 3:]).any(axis=2))
+    core_rate = core_votes[:, :, depth // 2:].mean(axis=2)
+    width_support = continuous.mean(axis=1)
+    # Pool colour evidence only inside rays that passed the width check. Keep
+    # the two votes separate: binarising each ray's colour first makes the
+    # outcome jump on a single mixed pixel in this deliberately small region.
+    core_support = (core_rate * continuous).sum(axis=1) / np.maximum(1, continuous.sum(axis=1))
+    valid = ((width_support >= config.minimum_white_lanes)
+             & (core_support >= config.minimum_white_core_support))
+    return valid, np.minimum(width_support, core_support)
+
+
+def observe_boundary(contour, purple, white, config, white_core_mask=None):
     points = _dense_contour(contour)
     count = len(points)
     if count < 3:
@@ -165,6 +208,10 @@ def observe_boundary(contour, purple, white, config):
     # supplies purple-side ownership; inward support is a confidence weight.
     valid = ((white_rate >= max(.5, config.minimum_white_support))
              & _sample(purple, points) & white_votes[:, :2].any(axis=1))
+    core = white if white_core_mask is None else white_core_mask
+    band_valid, band_support = _white_band_evidence(
+        points, tangent, normals, purple, white, core, config)
+    valid &= band_valid
     height, width = purple.shape
     valid &= ((points[:, 0] > 0) & (points[:, 0] < width - 1)
               & (points[:, 1] > 0) & (points[:, 1] < height - 1))
@@ -174,7 +221,8 @@ def observe_boundary(contour, purple, white, config):
         tangent = np.roll(points, -radius, axis=0) - np.roll(points, radius, axis=0)
         tangent /= np.maximum(1e-9, np.linalg.norm(tangent, axis=1))[:, None]
         normals = orientation * np.column_stack((tangent[:, 1], -tangent[:, 0]))
-    return OrderedBoundary(points, valid, normals, white_rate * (.5 + .5 * purple_rate),
+    return OrderedBoundary(points, valid, normals,
+                           white_rate * band_support * (.5 + .5 * purple_rate),
                            orientation, raw_points)
 
 
@@ -487,7 +535,7 @@ def extract_corners(result, config):
             result.corner_supports[tuple(map(int, rounded))] = (first, second)
 
 
-def detect_boundaries(contours, white_mask, purple_mask, config=None):
+def detect_boundaries(contours, white_mask, purple_mask, config=None, *, white_core_mask=None):
     config = config or BoundaryConfig()
     result = BoundaryResult(config=config)
     result.image_shape = white_mask.shape[:2]
@@ -495,7 +543,7 @@ def detect_boundaries(contours, white_mask, purple_mask, config=None):
         purple_mask = np.zeros_like(white_mask)
         cv2.drawContours(purple_mask, contours, -1, 255, cv2.FILLED)
     for index, contour in enumerate(contours):
-        boundary = observe_boundary(contour, purple_mask, white_mask, config)
+        boundary = observe_boundary(contour, purple_mask, white_mask, config, white_core_mask)
         result.boundaries.append(boundary)
         result.pieces.extend(split_boundary(boundary, index, config))
     result.lines = merge_boundary_pieces(result.pieces, result.boundaries, config)
