@@ -1,5 +1,9 @@
 # Lingyan Pro Vision
 
+## 当前边界与角点算法（2026-10-10）
+
+正面和通用模式采用逐点紫白交界、局部轮廓分段、同边碎段合并及 OpenCV Huber 直线拟合。红色 L# 显示独立边界组；黄色为可见角点，紫红色为补偿角点。完整判据及参数见[安全区轮廓直线与角点重构规则](doc/安全区轮廓直线与角点重构规则.md)。侧面模式沿用原流程。
+
 多相机标定与切换见[多相机独立标定与切换](doc/多相机独立标定与切换.md)。新相机先用 `python -m calibration.probe_camera` 查实际模式，随后用 `python -m camera_profiles add` 注册独立 ID。标定照片、点位和结果都按 ID 分目录；运行识别可使用 `--camera <ID>`。灵眼既有数据已单独归档，尚需重新拟合有效的安装外参。
 
 ## 多相机标定与切换
@@ -22,6 +26,12 @@ This is a standalone VS Code project for testing the purple safety-zone detector
 The current camera choice is the original LINGYAN Pro at 640 x 480 without
 rotation. The SeekFree 彩钻风 Pro remains an explicit alternative profile.
 Press `q` or `Esc` to stop the preview.
+
+## 识别预览布局
+
+主窗口根据桌面工作区自动放大：左侧彩色识别图约占 2/3 宽度，右侧二值图约占 1/3，均保持原始宽高比。距离和图例放到右下方，角点编号、距离、拟合边编号在显示缩放后绘制。
+
+HSV/几何滑条不再占用主窗口顶部；主窗口只保留两行状态。按 **P** 打开或关闭独立参数窗口，关闭参数窗口会保留当前调节值；按 **S** 保存原图和预览，按 **Q/Esc** 退出。需要启动时显示滑条，可直接运行 `python purple_camera_segmentation.py --camera usb0bda3035_1080p --scene auto --parameters`。
 
 ## 一次启动完整程序（默认入口）
 

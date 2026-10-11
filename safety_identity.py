@@ -172,6 +172,30 @@ def choose_scene(templates, fallback="front-facing"):
     return next(iter(scenes)) if len(scenes) == 1 else fallback
 
 
+def supported_corner_rays(point, supporting_lines):
+    """Orient the detector's validated corner sides toward their visible spans.
+
+    The detector has already checked white support, connectivity/gaps and
+    endpoint distances. Use that same pair for identity instead of imposing
+    a second, inconsistent endpoint-inset threshold on raw contour pieces.
+    """
+    p = np.asarray(point, dtype=float)
+    rays = []
+    for line in supporting_lines:
+        start = np.asarray(line.fitted_start, dtype=float)
+        end = np.asarray(line.fitted_end, dtype=float)
+        if np.linalg.norm(end - start) < 1.0:
+            continue
+        far_endpoint = max((start, end), key=lambda endpoint: np.linalg.norm(endpoint - p))
+        direction = far_endpoint - p
+        if np.linalg.norm(direction) < 1.0:
+            continue
+        angle = math.degrees(math.atan2(-direction[1], direction[0]))
+        if not any(abs(normalize_heading_deg(angle - old)) < 10 for old in rays):
+            rays.append(angle)
+    return tuple(rays)
+
+
 def directed_rays(point, segments, inferred, width, model):
     """Use nearby *endpoints*, not an infinite unoriented line at the corner.
 

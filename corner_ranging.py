@@ -171,26 +171,33 @@ def save_range_image(path, image):
     Path(path).write_bytes(encoded.tobytes())
 
 
-def draw_range_tags(image, readings):
-    scale = max(.6, image.shape[1] / 960 * .7)
+def draw_range_tags(image, readings, *, pixel_scale=1., font_scale=None):
+    scale = font_scale if font_scale is not None else max(.6, image.shape[1] / 960 * .7)
     for reading in readings:
         if not reading.valid:
             continue
-        text = f"{reading.label} r={reading.distance_mm/1000:.3f}m"
+        text = f"{reading.label} r={reading.distance_mm:.0f}mm"
         if reading.inferred:
             text += " EST"
         color = (0, 165, 255) if reading.inferred else (100, 255, 100)
         text_width = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)[0][0]
-        x = max(4, min(int(reading.pixel[0])+12, image.shape[1]-text_width-4))
-        y = max(28, min(int(reading.pixel[1])+60, image.shape[0]-8))
+        x = max(4, min(int(reading.pixel[0]*pixel_scale)+8, image.shape[1]-text_width-4))
+        y = max(28, min(int(reading.pixel[1]*pixel_scale)+26, image.shape[0]-8))
         cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 5, cv2.LINE_AA)
         cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2, cv2.LINE_AA)
 
 
 def append_range_panel(preview, ranger, readings):
     # Resize only the display, after measuring native pixels; retain readable text.
+    native_preview_width = preview.shape[1]
     if preview.shape[1] > 1280:
         preview = cv2.resize(preview, (1280, round(preview.shape[0]*1280/preview.shape[1])))
+    else:
+        preview = preview.copy()
+    display_scale = preview.shape[1]/native_preview_width
+    # Draw readable labels after display scaling, only inside the colour image.
+    colour_width = min(preview.shape[1],round(ranger.size[0]*display_scale))
+    draw_range_tags(preview[:,:colour_width],readings,pixel_scale=display_scale,font_scale=.60)
     panel = np.full((224, preview.shape[1], 3), 24, dtype=np.uint8)
     lines = [(f"BODY RANGE: Z={ranger.target_z_mm:g}mm | limit={ranger.max_distance_mm:g}mm | "
               "X forward, Y left | estimates, not field pose", (230, 230, 230))]

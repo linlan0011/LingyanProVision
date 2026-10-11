@@ -119,8 +119,32 @@ class RangingTests(unittest.TestCase):
         self.assertEqual(command[command.index("--camera")+1], "usb0bda3035_1080p")
         self.assertEqual(command[command.index("--target-z-mm")+1], "0.0")
         self.assertEqual(command[command.index("--range-max-mm")+1], "1000.0")
+        args.target_z_mm = None
         with self.assertRaises(ValueError):
-            vision_command(build_parser().parse_args(["--ranging"]), Path("stop"))
+            vision_command(args, Path("stop"))
+
+    def test_full_app_defaults_to_calibrated_ground_ranging_and_can_disable(self):
+        args = build_parser().parse_args([])
+        command = vision_command(args,Path("stop"))
+        self.assertEqual(args.camera,"usb0bda3035_1080p")
+        self.assertIn("--ranging",command)
+        self.assertEqual(command[command.index("--target-z-mm")+1],"0.0")
+        disabled = vision_command(build_parser().parse_args(["--camera","lingyan","--no-ranging"]),Path("stop"))
+        self.assertNotIn("--ranging",disabled)
+        self.assertNotIn("--association-output",disabled)
+
+    def test_labels_are_drawn_at_display_scale_without_changing_input_image(self):
+        ranger = fixture()
+        reading = ranger.project((400,360),label="R1")
+        preview = np.zeros((480,1280,3),np.uint8)
+        with patch.object(cv2,"putText",wraps=cv2.putText) as draw:
+            result = append_range_panel(preview,ranger,[reading])
+        calls = [c for c in draw.call_args_list if c.args[1].startswith("R1 r=")]
+        self.assertTrue(calls)
+        self.assertIn("mm",calls[0].args[1])
+        self.assertEqual(calls[0].args[4],.60)
+        self.assertFalse(preview.any())
+        self.assertTrue(result.any())
 
     def test_live_pipeline_calls_ranging_without_modifying_detection(self):
         import purple_camera_segmentation as vision
@@ -140,6 +164,7 @@ class RangingTests(unittest.TestCase):
             argv = ["vision", "--scene", "front-facing", "--ranging", "--target-z-mm", "0",
                     "--pose-file", str(pose)]
             with patch("sys.argv", argv), patch.object(vision, "open_camera", return_value=Camera()), \
+                    patch.object(vision, "preview_dimensions", return_value=(1440,792)), \
                     patch("corner_ranging.CornerRanger.from_camera", return_value=ranger), \
                     patch.object(ranger, "measure", wraps=ranger.measure) as measure, \
                     patch.object(cv2, "namedWindow"), patch.object(cv2, "resizeWindow"), \
@@ -151,7 +176,7 @@ class RangingTests(unittest.TestCase):
                 self.assertEqual(vision.main(), 0)
         self.assertEqual(measure.call_count, 1)
         self.assertTrue(any(r.valid for r in ranger.measure(measure.call_args.args[0])))
-        self.assertEqual(displays[0].shape[0], 790)
+        self.assertEqual(displays[0].shape, (792,1440,3))
 
 
 if __name__ == "__main__":

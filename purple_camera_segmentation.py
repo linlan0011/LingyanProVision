@@ -15,12 +15,15 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from boundary_geometry import BoundaryConfig, PointGeometry, detect_boundaries, draw_boundary_result
+from preview_display import ParameterPanel, preview_dimensions, compose_preview
 from camera_orientation import ROTATION_CHOICES, rotate_frame
 from camera_profiles import CameraProfile, load_intrinsics, load_mount, load_profiles, verify_capture_format
 from field_zones import ZoneFileReader, matching_zones
-from pose_io import PoseFileReader
+from pose_io import PoseFileReader, normalize_heading_deg
 from safety_identity import (DEFAULT_TEMPLATES, TemplateReader, active_templates,
-    choose_scene, CornerObservation, directed_rays, associate_corners, draw_identity_overlay)
+    choose_scene, CornerObservation, directed_rays, supported_corner_rays,
+    associate_corners, draw_identity_overlay)
 
 
 @dataclass(frozen=True)
@@ -93,7 +96,7 @@ GENERAL_RULES = SceneRules(
     require_both_white_edges=False,
     merge_structural_turns=False, merge_x_fraction=0.0,
     merge_y_fraction=0.0, infer_hidden_corners=True,
-    adaptive_exposure=False, allow_split_components=False,
+    adaptive_exposure=False, allow_split_components=True,
     split_max_gap_fraction=0.10,
 )
 SCENE_RULES = {
@@ -109,9 +112,11 @@ SEEKFREE_SCENE_RULES = {
 }
 # First-pass HSV tuning from the 2026-10-02 live frame for the 1920x1080
 # Realtek USB camera. Its purple target is concentrated around H=126..141;
-# keep the established scene geometry rules unchanged for each detector mode.
+# max_corner_angle is retained for legacy helpers. The rewritten live front /
+# general detector below uses its own broad 5..175-degree noise floor.
 USB_0BDA_3035_SCENE_RULES = {
-    scene: replace(rules, h_low=120, h_high=150, s_min=55, v_min=25)
+    scene: replace(rules, h_low=120, h_high=150, s_min=55, v_min=25,
+                   max_corner_angle=165.0 if scene == "front-facing" else rules.max_corner_angle)
     for scene, rules in SCENE_RULES.items()
 }
 CAMERA_SCENE_RULES = {
@@ -219,13 +224,12 @@ def select_safety_component_ranks(
         _, ax, ay, aw, ah, *_ = first
         _, bx, by, bw, bh, *_ = second
         horizontal_gap = max(0, max(ax, bx) - min(ax + aw, bx + bw))
-        vertical_overlap = max(0, min(ay + ah, by + bh) - max(ay, by))
-        center_gap = abs((ay + ah / 2.0) - (by + bh / 2.0))
-        return (
-            horizontal_gap <= rules.split_max_gap_fraction * image_width
-            and (vertical_overlap >= 0.35 * min(ah, bh)
-                 or center_gap <= 0.08 * image_height)
-        )
+        vertical_gap = max(0, max(ay, by) - min(ay + ah, by + bh))
+        # Splitting by an occluder is not limited to horizontal image pieces.
+        # Candidate ownership remains anchored at the largest purple region;
+        # the geometry stage independently validates every proposed merge.
+        extent = max(aw, ah, bw, bh)
+        return float(np.hypot(horizontal_gap, vertical_gap)) <= max(24., .35 * extent)
 
     # A block can split one long purple frame into more than two pieces.
     # Expand through neighbouring large pieces rather than comparing every
@@ -919,6 +923,7 @@ def find_front_connected_fitted_corners_across_components(
     white_mask: Optional[np.ndarray],
     purple_mask: Optional[np.ndarray],
     rules: SceneRules,
+    corner_supports: Optional[dict] = None,
 ) -> list[tuple[np.ndarray, float]]:
     """Mark intersections whose fitted sides are joined by a short green turn."""
     if white_mask is None or not contours:
@@ -1004,14 +1009,10 @@ def find_front_connected_fitted_corners_across_components(
             if (float(np.linalg.norm(first_endpoint - intersection)) > maximum_endpoint_gap
                     or float(np.linalg.norm(second_endpoint - intersection)) > maximum_endpoint_gap):
                 continue
-            first_ray = first_endpoint - intersection
-            second_ray = second_endpoint - intersection
-            ray_norm = float(np.linalg.norm(first_ray) * np.linalg.norm(second_ray))
-            if ray_norm < 1.0:
+            rays = supported_corner_rays(intersection, (first, second))
+            if len(rays) != 2:
                 continue
-            angle = float(np.degrees(np.arccos(np.clip(
-                np.dot(first_ray, second_ray) / ray_norm, -1.0, 1.0,
-            ))))
+            angle = abs(normalize_heading_deg(rays[0] - rays[1]))
             if not rules.min_corner_angle <= angle <= rules.max_corner_angle:
                 continue
             if (intersection[0] < -2 or intersection[0] > image_width + 1
@@ -1024,7 +1025,43 @@ def find_front_connected_fitted_corners_across_components(
                    for existing, _ in corners):
                 continue
             corners.append((point, angle))
+            if corner_supports is not None:
+                corner_supports[tuple(map(int, point))] = (first, second)
     return corners
+
+
+def find_effective_boundary_corners(
+    contours: list[np.ndarray],
+    white_mask: Optional[np.ndarray],
+    purple_mask: Optional[np.ndarray],
+    rules: SceneRules,
+    corner_min_side: int = 12,
+    corner_supports: Optional[dict] = None,
+    boundary_result: Optional[dict] = None,
+    point_geometry: Optional[PointGeometry] = None,
+) -> tuple[list[tuple[np.ndarray, float]], list[tuple[np.ndarray, float]]]:
+    """Ordered purple/white observations -> multiple robust lines -> corners.
+
+    The result is shared with rendering and identity, so both consume exactly
+    the same accepted observations and supporting line groups.
+    """
+    if white_mask is None or not contours:
+        return [], []
+    scale = min(white_mask.shape[:2]) / 480.0
+    config = BoundaryConfig(
+        minimum_edge=max(3.0, float(corner_min_side)),
+        minimum_white_support=rules.display_white_support,
+        approximation_px=max(1.0, 2.4 * scale),
+        fit_tolerance_px=max(1.5, 3.0 * scale),
+        infer_corners=rules.infer_hidden_corners,
+        point_geometry=point_geometry,
+    )
+    result = detect_boundaries(contours, white_mask, purple_mask, config)
+    if corner_supports is not None:
+        corner_supports.update(result.corner_supports)
+    if boundary_result is not None:
+        boundary_result['result'] = result
+    return result.visible, result.inferred
 
 
 def find_visible_corners(
@@ -1223,6 +1260,7 @@ def resolve_front_corner_overlap(
     inferred_corners: list[tuple[np.ndarray, float]],
     image_shape: tuple[int, ...],
     rules: Optional[SceneRules] = None,
+    corner_supports: Optional[dict] = None,
 ) -> tuple[list[tuple[np.ndarray, float]], list[tuple[np.ndarray, float]]]:
     """Return exactly one result for each physical frontal-corner region."""
     image_height, image_width = image_shape[:2]
@@ -1234,6 +1272,38 @@ def resolve_front_corner_overlap(
         return (abs(float(first[0] - second[0])) <= horizontal_gap
                 and abs(float(first[1] - second[1])) <= vertical_gap)
 
+    def same_support_pair(first, second) -> bool:
+        def same_line(a, b):
+            start_a = np.asarray(a.fitted_start, dtype=float)
+            start_b = np.asarray(b.fitted_start, dtype=float)
+            direction_a = np.asarray(a.fitted_end, dtype=float) - start_a
+            direction_b = np.asarray(b.fitted_end, dtype=float) - start_b
+            length_a = np.linalg.norm(direction_a)
+            length_b = np.linalg.norm(direction_b)
+            if min(length_a, length_b) < 1.0:
+                return False
+            direction_a /= length_a
+            direction_b /= length_b
+            if abs(float(np.dot(direction_a, direction_b))) < np.cos(np.deg2rad(10.0)):
+                return False
+            offset = start_b - start_a
+            perpendicular = abs(float(offset[0]*direction_a[1] - offset[1]*direction_a[0]))
+            return perpendicular <= max(6.0, 0.018 * min(image_width, image_height))
+        return ((same_line(first[0], second[0]) and same_line(first[1], second[1]))
+                or (same_line(first[0], second[1]) and same_line(first[1], second[0])))
+
+    def same_corner(first, second) -> bool:
+        if not same_end(first[1], second[1]):
+            return False
+        if first[0] == second[0] == "visible" and corner_supports is not None:
+            first_pair = corner_supports.get(tuple(map(int, first[1])))
+            second_pair = corner_supports.get(tuple(map(int, second[1])))
+            if first_pair is not None and second_pair is not None:
+                # Adjacent real corners can share one side and still be close
+                # in a distant view. Merge only the same pair of physical sides.
+                return same_support_pair(first_pair, second_pair)
+        return True
+
     tagged = [
         ("visible", point, angle) for point, angle in visible_corners
     ] + [
@@ -1244,7 +1314,7 @@ def resolve_front_corner_overlap(
         matching = next(
             (
                 group for group in groups
-                if any(same_end(candidate[1], member[1]) for member in group)
+                if any(same_corner(candidate, member) for member in group)
             ),
             None,
         )
@@ -1296,6 +1366,7 @@ def find_front_occluded_corners_across_components(
     purple_mask: Optional[np.ndarray],
     visible_corners: list[tuple[np.ndarray, float]],
     rules: SceneRules,
+    corner_supports: Optional[dict] = None,
 ) -> list[tuple[np.ndarray, float]]:
     """Intersect valid front edges even when an occluder splits the frame."""
     if white_mask is None or not contours:
@@ -1359,7 +1430,7 @@ def find_front_occluded_corners_across_components(
             for second_member in second.members
         )
 
-    candidates: list[tuple[np.ndarray, float, float]] = []
+    candidates: list[tuple[np.ndarray, float, float, MergedBoundaryLine, MergedBoundaryLine]] = []
     max_extension = max(40.0, 0.80 * height)
     for near_index, near_segment in enumerate(lines):
         near_start = near_segment.fitted_start
@@ -1441,25 +1512,26 @@ def find_front_occluded_corners_across_components(
             if any(float(np.linalg.norm(point - visible)) < 12.0
                    for visible, _ in visible_corners):
                 continue
-            first_ray = side_endpoint - point
-            second_ray = near_endpoint - point
-            ray_norm = float(np.linalg.norm(first_ray) * np.linalg.norm(second_ray))
-            if ray_norm < 1.0:
+            rays = supported_corner_rays(point, (side_segment, near_segment))
+            if len(rays) != 2:
                 continue
-            angle = float(np.degrees(np.arccos(np.clip(
-                np.dot(first_ray, second_ray) / ray_norm, -1.0, 1.0,
-            ))))
+            angle = abs(normalize_heading_deg(rays[0] - rays[1]))
             if not 20.0 <= angle <= 160.0:
                 continue
             score = min(side_support, near_support) / (1.0 + side_extension + near_extension)
-            candidates.append((point, angle, score))
+            candidates.append((point, angle, score, side_segment, near_segment))
 
     candidates.sort(key=lambda item: item[2], reverse=True)
     inferred: list[tuple[np.ndarray, float]] = []
-    for point, angle, _ in candidates:
+    for point, angle, _, side_segment, near_segment in candidates:
         if any(float(np.linalg.norm(point - existing)) <= 15.0 for existing, _ in inferred):
             continue
-        inferred.append((np.rint(point).astype(np.int32), angle))
+        rounded = np.rint(point).astype(np.int32)
+        inferred.append((rounded, angle))
+        if corner_supports is not None:
+            corner_supports[tuple(map(int, rounded))] = (side_segment, near_segment)
+        if len(inferred) == 2:
+            break
     return inferred[:2]
 
 
@@ -1504,10 +1576,12 @@ def find_scene_inferred_corners(
 
 
 def identify_frame_corners(recognitions, safety_ranks, white_mask, mask, rules,
-                           templates, model, scene, pose=None, calibrated_ranger=None):
+                           templates, model, scene, pose=None, calibrated_ranger=None,
+                           corner_supports=None):
     """Attach map IDs only to the detector's accepted visible/inferred corners."""
     segments_by_rank = {}
-    if model is not None and white_mask is not None:
+    use_supports = scene in ("front-facing", "general") and corner_supports is not None
+    if model is not None and white_mask is not None and not use_supports:
         for rank, (detection, _, _) in enumerate(recognitions, 1):
             if rank in safety_ranks:
                 segments_by_rank[rank] = extract_valid_boundary_segments(
@@ -1524,7 +1598,10 @@ def identify_frame_corners(recognitions, safety_ranks, white_mask, mask, rules,
                     continue
                 seen.add(key)
                 segments = all_segments if is_inferred and scene == "front-facing" else segments_by_rank.get(rank, [])
-                rays = directed_rays(point, segments, is_inferred, mask.shape[1], model) if model else ()
+                if use_supports:
+                    rays = supported_corner_rays(point, corner_supports.get(key, ())) if model else ()
+                else:
+                    rays = directed_rays(point, segments, is_inferred, mask.shape[1], model) if model else ()
                 observations.append(CornerObservation(tuple(map(float, point)), is_inferred, rays, rank))
     return associate_corners(observations, templates, model, pose=pose, image_width=mask.shape[1],
                              calibrated_ranger=calibrated_ranger)
@@ -1567,6 +1644,7 @@ def main() -> int:
                         help="safety-zone numbering and directed-edge templates")
     parser.add_argument("--stop-file", type=Path, default=None,
                         help="launcher session stop signal; normally managed by run_app.py")
+    parser.add_argument("--parameters", action="store_true", help="show the detachable HSV parameter window at startup")
     args = parser.parse_args()
     association_writer = None
     association_report = None
@@ -1600,8 +1678,10 @@ def main() -> int:
     rules_for_camera = CAMERA_SCENE_RULES.get(args.camera, SCENE_RULES)
     rules = rules_for_camera[scene]
 
+    point_geometry = None
     try:
-        load_intrinsics(args.camera)
+        _, intrinsic_data = load_intrinsics(args.camera)
+        point_geometry = PointGeometry.from_intrinsics(intrinsic_data)
         intrinsic_status = "matched"
     except (FileNotFoundError, ValueError) as error:
         intrinsic_status = f"pending ({error})"
@@ -1655,17 +1735,12 @@ def main() -> int:
 
     window = "Camera - Purple Segmentation + Body Ranging" if ranger is not None else "Camera - Purple Segmentation"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window, min(1280, display_width * 2), min(720, display_height))
-    cv2.createTrackbar("H low", window, rules.h_low, 179, nothing)
-    cv2.createTrackbar("H high", window, rules.h_high, 179, nothing)
-    cv2.createTrackbar("S min", window, rules.s_min, 255, nothing)
-    cv2.createTrackbar("V min", window, rules.v_min, 255, nothing)
-    cv2.createTrackbar("min area", window, rules.min_area, 5000, nothing)
-    cv2.createTrackbar("corner min area", window, rules.corner_min_area, 10000, nothing)
-    cv2.createTrackbar("corner min side", window, rules.corner_min_side, 200, nothing)
-    cv2.createTrackbar("white S max", window, rules.white_s_max, 255, nothing)
-    cv2.createTrackbar("white V min", window, rules.white_v_min, 255, nothing)
-    cv2.createTrackbar("near band %", window, rules.near_band_percent, 30, nothing)
+    preview_size = preview_dimensions((display_height, display_width))
+    cv2.resizeWindow(window, *preview_size)
+    parameters = ParameterPanel(
+        {name: getattr(rules, field) for name, field in trackbar_fields.items()},
+        visible=args.parameters,
+    )
 
     last_time = time.perf_counter()
     shown_fps = 0.0
@@ -1689,6 +1764,7 @@ def main() -> int:
                     break
             except cv2.error:
                 break
+            parameters.poll()
             frame_count += 1
             now = time.perf_counter()
             dt = now - last_time
@@ -1703,12 +1779,12 @@ def main() -> int:
             if requested_scene == "auto":
                 next_scene = choose_scene(identity_templates, scene)
                 if next_scene != scene:
-                    scene_settings[scene] = {name: cv2.getTrackbarPos(name, window) for name in trackbar_fields}
+                    scene_settings[scene] = {name: parameters.get(name) for name in trackbar_fields}
                     scene = next_scene
                     rules = rules_for_camera[scene]
                     settings = scene_settings.get(scene, {name: getattr(rules, field) for name, field in trackbar_fields.items()})
                     for name, value in settings.items():
-                        cv2.setTrackbarPos(name, window, value)
+                        parameters.set(name, value)
                     print(f"pose template selected detector: {scene}", flush=True)
             if identity_templates and any(t.scene != scene for t in identity_templates):
                 identity_templates = []
@@ -1728,12 +1804,12 @@ def main() -> int:
             white_mask: Optional[np.ndarray] = None
             if color_mode:
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                h_low = cv2.getTrackbarPos("H low", window)
-                h_high = cv2.getTrackbarPos("H high", window)
-                s_min = cv2.getTrackbarPos("S min", window)
-                v_setting = cv2.getTrackbarPos("V min", window)
-                white_s_max = cv2.getTrackbarPos("white S max", window)
-                white_v_setting = cv2.getTrackbarPos("white V min", window)
+                h_low = parameters.get("H low")
+                h_high = parameters.get("H high")
+                s_min = parameters.get("S min")
+                v_setting = parameters.get("V min")
+                white_s_max = parameters.get("white S max")
+                white_v_setting = parameters.get("white V min")
                 v_min, white_v_min = effective_brightness_thresholds(
                     hsv, rules, v_setting, white_v_setting,
                 )
@@ -1755,20 +1831,22 @@ def main() -> int:
             kernel = np.ones((3, 3), np.uint8)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-            min_area = max(1, cv2.getTrackbarPos("min area", window))
-            corner_min_area = max(1, cv2.getTrackbarPos("corner min area", window))
-            corner_min_side = max(3, cv2.getTrackbarPos("corner min side", window))
-            near_band_percent = cv2.getTrackbarPos("near band %", window)
+            min_area = max(1, parameters.get("min area"))
+            corner_min_area = max(1, parameters.get("corner min area"))
+            corner_min_side = max(3, parameters.get("corner min side"))
+            near_band_percent = parameters.get("near band %")
             detections = find_largest_purple(mask, min_area)
             safety_ranks = select_safety_component_ranks(detections, rules, frame.shape)
             recognitions = []
             all_visible_corners = []
             all_inferred_corners = []
+            frame_corner_supports = {}
+            frame_boundary_result = {}
             for rank, detection in enumerate(detections[:12], start=1):
                 contour = detection[-1]
                 raw_corners = (
                     (
-                        [] if scene == "front-facing" else find_visible_corners(
+                        [] if scene in ("front-facing", "general") else find_visible_corners(
                             contour, corner_min_area, corner_min_side,
                             white_mask, scene, mask, rules,
                         )
@@ -1777,7 +1855,7 @@ def main() -> int:
                 )
                 visible_corners = select_scene_corners(raw_corners, scene, frame.shape, rules)
                 inferred_corners = (
-                    [] if scene == "front-facing" else find_scene_inferred_corners(
+                    [] if scene in ("front-facing", "general") else find_scene_inferred_corners(
                         scene, contour, white_mask,
                         corner_min_side, raw_corners, mask, rules,
                     )
@@ -1786,7 +1864,7 @@ def main() -> int:
                 recognitions.append((detection, visible_corners, inferred_corners))
                 all_visible_corners.extend(visible_corners)
                 all_inferred_corners.extend(inferred_corners)
-            if scene == "front-facing":
+            if scene in ("front-facing", "general"):
                 selected_indices = [
                     rank - 1 for rank in sorted(safety_ranks)
                     if 1 <= rank <= len(recognitions)
@@ -1794,12 +1872,11 @@ def main() -> int:
                 selected_contours = [
                     recognitions[index][0][-1] for index in selected_indices
                 ]
-                all_visible_corners = find_front_connected_fitted_corners_across_components(
-                    selected_contours, white_mask, mask, rules,
-                )
-                all_inferred_corners = find_front_occluded_corners_across_components(
-                    selected_contours, white_mask, mask,
-                    all_visible_corners, rules,
+                all_visible_corners, all_inferred_corners = find_effective_boundary_corners(
+                    selected_contours, white_mask, mask, rules, corner_min_side,
+                    corner_supports=frame_corner_supports,
+                    boundary_result=frame_boundary_result,
+                    point_geometry=point_geometry,
                 )
                 recognitions = [
                     (detection, [], [])
@@ -1827,33 +1904,6 @@ def main() -> int:
                         ),
                     )
                     recognitions[owner_index][2].append(inferred_corner)
-                # Resolve conflicts across every accepted purple component;
-                # an occluder can split one physical frame into several blobs.
-                all_visible_corners, all_inferred_corners = resolve_front_corner_overlap(
-                    all_visible_corners, all_inferred_corners, frame.shape, rules,
-                )
-                visible_keys = {
-                    (int(point[0]), int(point[1]))
-                    for point, _ in all_visible_corners
-                }
-                inferred_keys = {
-                    (int(point[0]), int(point[1]))
-                    for point, _ in all_inferred_corners
-                }
-                recognitions = [
-                    (
-                        detection,
-                        [
-                            corner for corner in visible_corners
-                            if (int(corner[0][0]), int(corner[0][1])) in visible_keys
-                        ],
-                        [
-                            corner for corner in inferred_corners
-                            if (int(corner[0][0]), int(corner[0][1])) in inferred_keys
-                        ],
-                    )
-                    for detection, visible_corners, inferred_corners in recognitions
-                ]
             reference_points = select_position_references(
                 all_visible_corners, all_inferred_corners,
                 frame.shape[0], near_band_percent,
@@ -1866,102 +1916,56 @@ def main() -> int:
                 recognitions, safety_ranks, white_mask, mask, rules,
                 identity_templates, template_model, scene, selected_pose,
                 ranger if args.ranging and args.target_z_mm == 0 else None,
+                corner_supports=frame_corner_supports if scene in ("front-facing", "general") else None,
             )
             overlay = frame.copy()
+            if scene in ("front-facing", "general"):
+                cv2.drawContours(overlay, [d[0][-1] for d in recognitions], -1, (255, 0, 0), 2)
+                if "result" in frame_boundary_result:
+                    draw_boundary_result(overlay, frame_boundary_result["result"], labels=False)
             for rank, (detection, visible_corners, inferred_corners) in enumerate(recognitions, start=1):
                 area, x, y, w, h, cx, cy, contour = detection
                 # The blue contour is the actual boundary of the segmented mask.
                 # Do not replace it with a larger external rectangle.
-                cv2.drawContours(overlay, [contour], -1, (255, 0, 0), 2)
+                if scene == "start-facing":
+                    cv2.drawContours(overlay, [contour], -1, (255, 0, 0), 2)
                 # Green marks only the portions adjacent to the white field.
-                draw_valid_boundary(
-                    overlay, contour, white_mask, purple_mask=mask,
-                    minimum_white_support=rules.display_white_support,
-                    approximation_ratio=rules.front_approx_ratio,
-                )
-                for corner_index, (point, angle) in enumerate(visible_corners, start=1):
-                    px, py = [int(value) for value in point]
-                    cv2.circle(overlay, (px, py), 6, (0, 255, 255), -1)
-                    cv2.putText(
-                        overlay,
-                        f"visible ({px},{py}) a={angle:.0f}",
-                        (px + 5, py - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (0, 255, 255),
-                        1,
-                        cv2.LINE_AA,
+                if scene == "start-facing":
+                    draw_valid_boundary(
+                        overlay, contour, white_mask, purple_mask=mask,
+                        minimum_white_support=rules.display_white_support,
+                        approximation_ratio=rules.front_approx_ratio,
                     )
-                for corner_index, (point, angle) in enumerate(inferred_corners, start=1):
-                    px, py = [int(value) for value in point]
-                    cv2.circle(overlay, (px, py), 7, (255, 0, 255), -1)
-                    cv2.putText(
-                        overlay,
-                        f"inferred ({px},{py}) a={angle:.0f}",
-                        (px + 5, py + 15),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (255, 0, 255),
-                        1,
-                        cv2.LINE_AA,
-                    )
-                component_references = sum(
-                    (int(point[0]), int(point[1])) in reference_points
-                    for point, _ in visible_corners + inferred_corners
-                )
-                cv2.putText(
-                    overlay,
-                    f"#{rank} A={area:.0f} visible={len(visible_corners)} inferred={len(inferred_corners)} ref={component_references}",
-                    (x, max(16, y - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.48,
-                    (0, 255, 0),
-                    1,
-                    cv2.LINE_AA,
-                )
+                for point, _ in visible_corners:
+                    cv2.circle(overlay, tuple(map(int, point)), 6, (0, 255, 255), -1)
+                for point, _ in inferred_corners:
+                    cv2.circle(overlay, tuple(map(int, point)), 7, (255, 0, 255), -1)
             for px, py in reference_points:
                 cv2.circle(overlay, (px, py), 11, (255, 255, 0), 3)
-            mode_text = (
-                f"COLOR/HSV effective V={v_min}/{white_v_min}"
-                if color_mode else "GRAYSCALE (purple unavailable)"
-            )
-            cv2.putText(overlay, f"{mode_text}  camera={args.camera}  scene={scene}  FPS={shown_fps:.1f}  blobs={len(detections)}", (10, 24),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(overlay, "BLUE=purple contour  GREEN=valid white boundary", (10, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(overlay, "MAGENTA=inferred corner", (10, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 0, 255), 1, cv2.LINE_AA)
-            cv2.putText(overlay, "CYAN ring=position reference", (10, 110),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 0), 1, cv2.LINE_AA)
-            cv2.putText(overlay, "q/Esc: quit  s: save frame", (10, 134), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                        (0, 255, 255), 1, cv2.LINE_AA)
             if selected_pose is not None:
                 pose_text = (
                     f"INPUT POSE x={selected_pose.x_mm:.1f} y={selected_pose.y_mm:.1f} "
                     f"heading={selected_pose.heading_deg:.1f} deg"
                 )
-                pose_color = (0, 255, 0)
             else:
                 pose_text = "INPUT POSE waiting for selected_pose.json"
-                pose_color = (0, 165, 255)
-            cv2.putText(overlay, pose_text, (10, 158), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
-                        pose_color, 2, cv2.LINE_AA)
-            active_indices = [str(index + 1) for index, zone in enumerate(zones) if zone in active_zones]
-            zone_text = "ZONE #" + ",#".join(active_indices) if active_indices else "ZONE unmatched"
-            cv2.putText(overlay, zone_text, (10, 182), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
-                        (0, 255, 0) if active_indices else (0, 165, 255), 2, cv2.LINE_AA)
-
             mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            if scene in ("front-facing", "general"):
+                cv2.drawContours(mask_bgr, [d[0][-1] for d in recognitions], -1, (255, 0, 0), 2)
+                if "result" in frame_boundary_result:
+                    draw_boundary_result(mask_bgr, frame_boundary_result["result"], labels=False)
             # Draw the exact same blue contour on the binary view. The contour
             # coordinates are unchanged; only the display image differs.
-            for detection, corners, inferred_corners in recognitions:
+            for rank, (detection, corners, inferred_corners) in enumerate(recognitions, 1):
                 contour = detection[-1]
-                cv2.drawContours(mask_bgr, [contour], -1, (255, 0, 0), 2)
-                draw_valid_boundary(
-                    mask_bgr, contour, white_mask, purple_mask=mask,
-                    minimum_white_support=rules.display_white_support,
-                    approximation_ratio=rules.front_approx_ratio,
-                )
+                if scene == "start-facing":
+                    cv2.drawContours(mask_bgr, [contour], -1, (255, 0, 0), 2)
+                if scene == "start-facing":
+                    draw_valid_boundary(
+                        mask_bgr, contour, white_mask, purple_mask=mask,
+                        minimum_white_support=rules.display_white_support,
+                        approximation_ratio=rules.front_approx_ratio,
+                    )
                 for point, _ in corners:
                     px, py = [int(value) for value in point]
                     cv2.circle(mask_bgr, (px, py), 5, (0, 255, 255), -1)
@@ -1970,24 +1974,18 @@ def main() -> int:
                     cv2.circle(mask_bgr, (px, py), 6, (255, 0, 255), -1)
             for px, py in reference_points:
                 cv2.circle(mask_bgr, (px, py), 11, (255, 255, 0), 3)
-            cv2.putText(mask_bgr, "BLUE = segmented contour", (10, 24),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 0, 0), 2, cv2.LINE_AA)
-            cv2.putText(mask_bgr, "GREEN = white-purple boundary", (10, 48),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 0), 1, cv2.LINE_AA)
-            cv2.putText(mask_bgr, "MAGENTA = inferred corner", (10, 88),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 0, 255), 1, cv2.LINE_AA)
-            cv2.putText(mask_bgr, "CYAN ring = position reference", (10, 108),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 0), 1, cv2.LINE_AA)
-            overlay = draw_identity_overlay(overlay, identities, identity_templates, identity_status)
-            mask_bgr = draw_identity_overlay(mask_bgr, identities, identity_templates, identity_status)
-            range_readings = []
-            if ranger is not None:
-                from corner_ranging import draw_range_tags, append_range_panel
-                range_readings = ranger.measure(recognitions, identities)
-                draw_range_tags(overlay, range_readings)
-            preview = np.hstack((overlay, mask_bgr))
-            if ranger is not None:
-                preview = append_range_panel(preview, ranger, range_readings)
+            range_readings = ranger.measure(recognitions, identities) if ranger is not None else []
+            parameter_text = (
+                f"HSV H={h_low}-{h_high} S>={s_min} V>={v_min} | White S<={white_s_max} V>={white_v_min}"
+                if color_mode else "GRAYSCALE: colour segmentation unavailable"
+            )
+            preview = compose_preview(
+                overlay, mask_bgr, recognitions, identities, range_readings,
+                size=preview_size,
+                title=f"{args.camera} | {scene} | FPS {shown_fps:.1f} | visible {len(all_visible_corners)} / estimated {len(all_inferred_corners)}",
+                parameters=parameter_text, pose_text=pose_text, status=identity_status,
+                boundary_result=frame_boundary_result.get("result"), ranger=ranger,
+            )
             if ranger is not None:
                 from pose_association import association_payload
                 association_report = association_payload(args.camera, frame_count, ranger, range_readings,
@@ -1997,6 +1995,8 @@ def main() -> int:
                     association_writer.write(association_report)
             cv2.imshow(window, preview)
             key = cv2.waitKey(1) & 0xFF
+            if key in (ord("p"), ord("P")):
+                parameters.toggle()
             if key == ord("s"):
                 output_dir = Path(__file__).resolve().parent / "照片"
                 output_dir.mkdir(parents=True, exist_ok=True)
