@@ -206,18 +206,23 @@ def select_safety_component_ranks(
     detections: list,
     rules: SceneRules,
     image_shape: tuple[int, ...],
+    *,
+    minimum_area: Optional[float] = None,
 ) -> set[int]:
-    """Keep nearby large purple pieces when a front-view occluder splits them."""
+    """Keep nearby purple fragments above an absolute noise-area floor."""
     if not detections:
         return set()
     selected = {1}
     if not rules.allow_split_components:
         return selected
-    anchor_area = detections[0][0]
-    image_height, image_width = image_shape[:2]
+    # A distant narrow side can be much smaller than the near side of the same
+    # frame. Area only removes speckle; white support and fitted geometry are
+    # validated later. The caller can supply the current slider values.
+    if minimum_area is None:
+        minimum_area = max(float(rules.min_area), float(rules.corner_min_area))
     candidates = {
         rank for rank, detection in enumerate(detections[1:12], start=2)
-        if detection[0] >= max(float(rules.corner_min_area), 0.25 * anchor_area)
+        if detection[0] >= minimum_area
     }
 
     def adjacent(first: tuple, second: tuple) -> bool:
@@ -1851,7 +1856,10 @@ def main() -> int:
             corner_min_side = max(3, parameters.get("corner min side"))
             near_band_percent = parameters.get("near band %")
             detections = find_largest_purple(mask, min_area)
-            safety_ranks = select_safety_component_ranks(detections, rules, frame.shape)
+            safety_ranks = select_safety_component_ranks(
+                detections, rules, frame.shape,
+                minimum_area=max(min_area, corner_min_area),
+            )
             recognitions = []
             all_visible_corners = []
             all_inferred_corners = []

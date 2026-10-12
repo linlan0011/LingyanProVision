@@ -271,5 +271,69 @@ class BoundaryGeometryTests(unittest.TestCase):
         self.assert_corners(result, [(100, 100), (500, 100), (500, 400), (100, 400)])
 
 
+class SafetyComponentSelectionTests(unittest.TestCase):
+    def frame(self):
+        purple = np.zeros((480, 640), np.uint8)
+        cv2.rectangle(purple, (80, 300), (560, 440), 255, -1)
+        cv2.rectangle(purple, (100, 200), (500, 212), 255, -1)
+        return purple
+
+    def select(self, purple, scene='front-facing', **kwargs):
+        import purple_camera_segmentation as vision
+        detections = vision.find_largest_purple(purple, 80)
+        ranks = vision.select_safety_component_ranks(
+            detections, vision.SCENE_RULES[scene], purple.shape, **kwargs)
+        return detections, ranks
+
+    def test_small_far_side_survives_perspective_mirror_and_rotation(self):
+        purple = self.frame()
+        for frame in (purple, cv2.flip(purple, 1),
+                      cv2.rotate(purple, cv2.ROTATE_90_CLOCKWISE)):
+            for scene in ('front-facing', 'general'):
+                detections, ranks = self.select(frame, scene)
+                self.assertLess(detections[1][0], .25 * detections[0][0])
+                self.assertEqual(ranks, {1, 2}, scene)
+
+    def test_below_floor_noise_and_distant_fragments_are_excluded(self):
+        purple = self.frame()
+        cv2.rectangle(purple, (100, 250), (112, 262), 255, -1)  # Near, area 144.
+        cv2.rectangle(purple, (100, 10), (500, 22), 255, -1)  # Large but distant.
+        detections, ranks = self.select(purple)
+        selected_boxes = {row[1:5] for index, row in enumerate(detections, 1) if index in ranks}
+        self.assertEqual(selected_boxes, {(80, 300, 481, 141), (100, 200, 401, 13)})
+
+    def test_small_fragments_can_connect_through_an_intermediate_fragment(self):
+        purple = self.frame()
+        purple[200:213, 100:501] = 0
+        cv2.rectangle(purple, (100, 40), (500, 52), 255, -1)
+        self.assertEqual(self.select(purple)[1], {1})
+        cv2.rectangle(purple, (100, 170), (500, 182), 255, -1)
+        self.assertEqual(self.select(purple)[1], {1, 2, 3})
+
+    def test_current_parameter_area_floor_is_used(self):
+        purple = self.frame()
+        self.assertEqual(self.select(purple, minimum_area=400)[1], {1, 2})
+        self.assertEqual(self.select(purple, minimum_area=8000)[1], {1})
+
+    def test_side_mode_keeps_its_existing_single_component_rule(self):
+        self.assertEqual(self.select(self.frame(), 'start-facing')[1], {1})
+
+    def test_selected_fragment_without_white_support_produces_no_corner(self):
+        import purple_camera_segmentation as vision
+        purple = self.frame()
+        white = cv2.bitwise_not(purple)
+        cv2.rectangle(white, (95, 195), (505, 217), 0, -1)
+        detections, ranks = self.select(purple)
+        self.assertEqual(ranks, {1, 2})
+        contours = [row[-1] for index, row in enumerate(detections, 1) if index in ranks]
+        state = {}
+        visible, inferred = vision.find_effective_boundary_corners(
+            contours, white, purple, vision.FRONT_RULES,
+            white_core_mask=white, boundary_result=state)
+        self.assertEqual(len(visible), 4)
+        self.assertFalse(inferred)
+        self.assertFalse(state['result'].boundaries[1].valid.any())
+
+
 if __name__ == '__main__':
     unittest.main()
