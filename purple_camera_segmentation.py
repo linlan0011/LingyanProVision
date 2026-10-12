@@ -17,6 +17,9 @@ import numpy as np
 
 from boundary_geometry import BoundaryConfig, PointGeometry, detect_boundaries, draw_boundary_result
 from bottom_edge_classifier import BottomEdgeConfig, BottomEdgeResult, classify_bottom_edges
+from corner_ranging import DEFAULT_MAX_DISTANCE_MM
+from ground_corner_association import (GroundAssociationConfig, CalibratedGroundView,
+    associate_ground_corners, apply_ground_identities, circle_templates)
 from preview_display import ParameterPanel, preview_dimensions, compose_preview
 from camera_orientation import ROTATION_CHOICES, rotate_frame
 from camera_profiles import CameraProfile, load_intrinsics, load_mount, load_profiles, verify_capture_format
@@ -1632,7 +1635,8 @@ def main() -> int:
     parser.add_argument("--index", type=int)
     parser.add_argument("--ranging", action="store_true", help="enable calibrated body-frame corner ranging")
     parser.add_argument("--target-z-mm", type=float, help="required known corner height when ranging; ground=0")
-    parser.add_argument("--range-max-mm", type=float, default=2000., help="geometry distance limit, not validated accuracy range")
+    parser.add_argument("--range-max-mm", type=float, default=DEFAULT_MAX_DISTANCE_MM,
+                        help="maximum horizontal body-origin corner range; default 1000 mm")
     parser.add_argument("--range-inferred", action="store_true", help="also range inferred corners, explicitly labelled estimates")
     parser.add_argument("--association-output", type=Path,
                         help="read-only simulated pose / corner identity / range feedback file")
@@ -1667,10 +1671,19 @@ def main() -> int:
                         help="experimental post-detection upper/lower classification (this test branch defaults on)")
     parser.add_argument("--bottom-edge-tolerance-mm", type=int, default=30,
                         help="bottom length/width matching tolerance, also adjustable in the parameter window")
+    parser.add_argument('--ground-association', action=argparse.BooleanOptionalAction, default=True,
+                        help='associate lower corners using a bounded simulated pose and calibrated view')
+    parser.add_argument('--pose-radius-mm', type=int, default=200)
+    parser.add_argument('--ground-visible-tol-mm', type=int, default=30)
+    parser.add_argument('--ground-inferred-tol-mm', type=int, default=50)
     args = parser.parse_args()
     if not 0 <= args.bottom_edge_tolerance_mm <= 200:
         parser.error("--bottom-edge-tolerance-mm must be between 0 and 200")
     bottom_config = BottomEdgeConfig(tolerance_mm=args.bottom_edge_tolerance_mm)
+    if not 0 <= args.pose_radius_mm <= 3000:
+        parser.error('--pose-radius-mm must be between 0 and 3000')
+    if not all(0 <= value <= 200 for value in (args.ground_visible_tol_mm, args.ground_inferred_tol_mm)):
+        parser.error('ground measurement tolerances must be between 0 and 200 mm')
     association_writer = None
     association_report = None
     if args.association_output is not None:
@@ -1698,6 +1711,8 @@ def main() -> int:
               f"L={bottom_config.length_mm:g} W={bottom_config.width_mm:g}mm, "
               f"tolerance=+/-{bottom_config.tolerance_mm:g}mm", flush=True)
     requested_scene = args.scene
+    ground_view = (CalibratedGroundView(bottom_ranger)
+                   if args.ground_association and bottom_ranger is not None else None)
     scene = requested_scene if requested_scene != "auto" else "front-facing"
     camera_profile = CAMERA_PROFILES[args.camera]
     camera_index = args.index if args.index is not None else camera_profile.default_index
@@ -1773,6 +1788,10 @@ def main() -> int:
     parameter_values = {name: getattr(rules, field) for name, field in trackbar_fields.items()}
     if args.bottom_edge_test:
         parameter_values['bottom tol mm'] = args.bottom_edge_tolerance_mm
+    if args.ground_association:
+        parameter_values.update({'pose radius mm': args.pose_radius_mm,
+                                 'map tol mm': args.ground_visible_tol_mm,
+                                 'infer tol mm': args.ground_inferred_tol_mm})
     parameters = ParameterPanel(parameter_values, visible=args.parameters)
 
     last_time = time.perf_counter()
@@ -1809,8 +1828,15 @@ def main() -> int:
             active_zones = matching_zones(selected_pose, zones) if selected_pose else []
             template_model = template_reader.poll()
             identity_templates, identity_status = active_templates(selected_pose, zones, template_model)
+            center_templates = identity_templates
+            if ground_view is not None and selected_pose is not None and template_model is not None:
+                possible = ground_view.landmarks(selected_pose, parameters.get('pose radius mm'), template_model)
+                safety_ids = {p['safety_id'] for p in possible if p['possibly_visible']}
+                identity_templates = circle_templates(selected_pose, zones, template_model, safety_ids,
+                                                      parameters.get('pose radius mm'))
+                identity_status = 'circle-based calibrated view'
             if requested_scene == "auto":
-                next_scene = choose_scene(identity_templates, scene)
+                next_scene = choose_scene(identity_templates, choose_scene(center_templates, scene))
                 if next_scene != scene:
                     scene_settings[scene] = {name: parameters.get(name) for name in trackbar_fields}
                     scene = next_scene
@@ -1977,6 +2003,18 @@ def main() -> int:
                                     if bottom_result.lower_seed is not None else set())
             else:
                 range_readings = ranger.measure(recognitions, identities) if ranger is not None else []
+            ground_report = None
+            if args.ground_association and bottom_result is not None:
+                ground_config = GroundAssociationConfig(
+                    prior_radius_mm=parameters.get('pose radius mm'),
+                    visible_tolerance_mm=parameters.get('map tol mm'),
+                    inferred_tolerance_mm=parameters.get('infer tol mm'))
+                identities, ground_report = associate_ground_corners(
+                    range_readings, bottom_result, selected_pose,
+                    template_model if color_mode and rotation == camera_profile.rotation else None,
+                    ground_view, ground_config)
+                range_readings = apply_ground_identities(range_readings, identities)
+                identity_status = ground_report['status']
             overlay = frame.copy()
             if scene in ("front-facing", "general"):
                 cv2.drawContours(overlay, [d[0][-1] for d in recognitions], -1, (255, 0, 0), 2)
@@ -2044,6 +2082,7 @@ def main() -> int:
                 parameters=parameter_text, pose_text=pose_text, status=identity_status,
                 boundary_result=frame_boundary_result.get("result"), ranger=frame_ranger,
                 bottom_edge_result=bottom_result,
+                ground_association=ground_report,
             )
             if ranger is not None:
                 from pose_association import association_payload
@@ -2052,6 +2091,8 @@ def main() -> int:
                                                          scene, args.pose_file)
                 if bottom_result is not None:
                     association_report['bottom_edge_test'] = bottom_result.payload()
+                if ground_report is not None:
+                    association_report['ground_association'] = ground_report
                 if association_writer is not None:
                     association_writer.write(association_report)
             cv2.imshow(window, preview)
@@ -2084,6 +2125,8 @@ def main() -> int:
                     payload = range_payload(args.camera, frame_count, frame_ranger, range_readings)
                     if bottom_result is not None:
                         payload['bottom_edge_test'] = bottom_result.payload()
+                    if ground_report is not None:
+                        payload['ground_association'] = ground_report
                     payload["pose_association"] = association_report
                     payload["created_utc"] = datetime.now(timezone.utc).isoformat()
                     payload["raw_image"] = str(snapshot_raw)

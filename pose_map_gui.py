@@ -524,6 +524,11 @@ class PoseMapApp:
         if data is None or not report_matches_pose(data, self.pose):
             self.live_identity_var.set("视觉回传：等待当前位姿的识别结果")
             return
+        if data.get('ground_association') is not None:
+            from ground_corner_map import draw_ground_feedback
+            summary = draw_ground_feedback(self.canvas, self.transform, data, self.pose)
+            self.live_identity_var.set('\n'.join(summary))
+            return
         ids = data.get("confirmed_corner_ids", [])
         summary = ["视觉编号：" + ("、".join(ids) if ids else "?（未确认）")]
         if not data.get("calibration_valid"):

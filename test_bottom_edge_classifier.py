@@ -196,9 +196,10 @@ class BottomEdgeTests(unittest.TestCase):
         mount = {'rotation_camera_to_body':[[0.,0.,1.],[-1.,0.,0.],[0.,-1.,0.]],
                  'camera_position_body_mm':[0.,0.,174.]}
         ranger = CornerRanger(intrinsic,mount,0.,include_inferred=True)
-        # Bottom: X 600..960, Y +/-330. Top is inset 30 and raised 20.
-        body = np.array([[930.,300.,20.],[930.,-300.,20.],
-                         [600.,330.,0.],[600.,-330.,0.]])
+        # Bottom: X 500..860, Y +/-330. Top is inset 30 and raised 20.
+        # All four ground projections remain within the current 1000 mm cap.
+        body = np.array([[830.,300.,20.],[830.,-300.,20.],
+                         [500.,330.,0.],[500.,-330.,0.]])
         rvec,_=cv2.Rodrigues(ranger.rotation.T)
         pixels=project_points(body,rvec,-ranger.rotation.T@ranger.center,
                               ranger.matrix,ranger.distortion,ranger.model)

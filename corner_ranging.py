@@ -13,6 +13,8 @@ from calibration.ground_project import pixel_to_body_plane
 from calibration.lens_models import undistort_points
 from camera_profiles import load_intrinsics, load_mount, file_sha256
 
+DEFAULT_MAX_DISTANCE_MM = 1000.
+
 
 @dataclass(frozen=True)
 class CornerRange:
@@ -30,7 +32,7 @@ class CornerRange:
 
 
 class CornerRanger:
-    def __init__(self, intrinsics, mount, target_z_mm, max_distance_mm=2000.,
+    def __init__(self, intrinsics, mount, target_z_mm, max_distance_mm=DEFAULT_MAX_DISTANCE_MM,
                  min_plane_angle_deg=3., include_inferred=False):
         if not math.isfinite(target_z_mm):
             raise ValueError("target height must be finite")
@@ -86,7 +88,7 @@ class CornerRanger:
             if point[0] <= 0:
                 return reject("behind_body_origin")
             distance = math.hypot(point[0], point[1])
-            if distance > self.max_distance_mm:
+            if distance > self.max_distance_mm + 1e-6:
                 return reject("beyond_distance_limit")
             return CornerRange(label, pixel, inferred, True, "estimated" if inferred else "",
                                *map(float, point), distance,

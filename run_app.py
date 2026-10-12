@@ -14,17 +14,22 @@ from tkinter import messagebox
 from pose_io import read_pose
 from pose_map_gui import PoseMapApp, build_parser as pose_parser
 from camera_profiles import load_profiles
+from corner_ranging import DEFAULT_MAX_DISTANCE_MM
 
 PROJECT = Path(__file__).resolve().parent
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Start pose UI and live camera together")
-    parser.add_argument('--camera', choices=load_profiles(), default='lingyan')
+    parser.add_argument('--camera', choices=load_profiles(), default='usb0bda3035_1080p')
     parser.add_argument('--index', type=int)
-    parser.add_argument('--ranging', action='store_true')
-    parser.add_argument('--target-z-mm', type=float)
-    parser.add_argument('--range-max-mm', type=float, default=2000.)
+    parser.add_argument('--ranging', action=argparse.BooleanOptionalAction, default=True,
+                        help='full app enables calibrated corner ranging; --no-ranging disables it')
+    parser.add_argument('--target-z-mm', type=float, default=0.,
+                        help='known corner height in body coordinates; current ground corners default to 0 mm')
+    parser.add_argument('--range-max-mm', type=float, default=DEFAULT_MAX_DISTANCE_MM)
+    parser.add_argument('--pose-radius-mm', type=int, default=200)
+    parser.add_argument('--ground-association', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--range-inferred', action='store_true')
     parser.add_argument('--association-output', type=Path)
     parser.add_argument('--pose-file', type=Path, default=PROJECT/'selected_pose.json')
@@ -40,6 +45,8 @@ def vision_command(args, stop_file):
             '--zones-file', str(args.zones_file.resolve()),
             '--templates-file', str(args.templates_file.resolve()),
             '--stop-file', str(stop_file)]
+    command.extend(('--pose-radius-mm', str(args.pose_radius_mm),
+                    '--ground-association' if args.ground_association else '--no-ground-association'))
     if args.index is not None:
         command.extend(('--index', str(args.index)))
     if args.ranging:

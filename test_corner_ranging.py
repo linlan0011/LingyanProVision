@@ -10,7 +10,8 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from corner_ranging import CornerRanger, append_range_panel, range_payload, save_range_image
+from corner_ranging import (CornerRanger, DEFAULT_MAX_DISTANCE_MM,
+                            append_range_panel, range_payload, save_range_image)
 from run_app import build_parser, vision_command
 
 
@@ -20,10 +21,29 @@ def fixture(**kwargs):
                  "image_width": 640, "image_height": 480, "model": "opencv_pinhole"}
     mount = {"rotation_camera_to_body": [[0., 0., 1.], [-1., 0., 0.], [0., -1., 0.]],
              "camera_position_body_mm": [0., 0., 300.]}
-    return CornerRanger(intrinsic, mount, kwargs.pop("target_z_mm", 0.), **kwargs)
+    # Generic projection fixtures deliberately cover 2 m; production defaults
+    # and the exact 1 m boundary are verified separately below.
+    return CornerRanger(intrinsic, mount, kwargs.pop("target_z_mm", 0.),
+                        max_distance_mm=kwargs.pop('max_distance_mm', 2000.), **kwargs)
 
 
 class RangingTests(unittest.TestCase):
+    def test_default_one_metre_range_is_inclusive_for_visible_and_inferred(self):
+        self.assertEqual(DEFAULT_MAX_DISTANCE_MM, 1000.)
+        ranger = fixture(max_distance_mm=DEFAULT_MAX_DISTANCE_MM, include_inferred=True)
+        from calibration.lens_models import project_points
+        for inferred in (False, True):
+            for x, y, accepted in ((999., 0., True), (1000., 0., True),
+                                   (1001., 0., False), (980., 250., False)):
+                rvec, _ = cv2.Rodrigues(ranger.rotation.T)
+                pixel = project_points(np.array([[x, y, 0.]]), rvec,
+                    -ranger.rotation.T @ ranger.center, ranger.matrix, ranger.distortion, ranger.model)[0]
+                result = ranger.project(pixel, inferred=inferred)
+                with self.subTest(inferred=inferred, x=x, y=y):
+                    self.assertEqual(result.valid, accepted)
+                    if not accepted:
+                        self.assertEqual(result.reason, 'beyond_distance_limit')
+
     def test_metric_coordinates_and_bearing(self):
         r = fixture().project((400, 360))
         self.assertTrue(r.valid)
@@ -129,6 +149,7 @@ class RangingTests(unittest.TestCase):
         self.assertEqual(args.camera,"usb0bda3035_1080p")
         self.assertIn("--ranging",command)
         self.assertEqual(command[command.index("--target-z-mm")+1],"0.0")
+        self.assertEqual(command[command.index('--range-max-mm')+1], '1000.0')
         disabled = vision_command(build_parser().parse_args(["--camera","lingyan","--no-ranging"]),Path("stop"))
         self.assertNotIn("--ranging",disabled)
         self.assertNotIn("--association-output",disabled)

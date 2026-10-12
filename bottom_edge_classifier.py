@@ -49,6 +49,7 @@ class BottomEdgeResult:
     lower_seed: tuple[int, int] | None = None
     # Only adjacent accepted corners on the SAME validated fitted line.
     connections: list[tuple[tuple[int, int], tuple[int, int], int]] = field(default_factory=list)
+    eligible_count: int = 0
 
     @property
     def by_pixel(self):
@@ -122,8 +123,18 @@ def classify_bottom_edges(readings, boundary_result, config=None):
                       for point, r in unique.items()]
     if not unique:
         return result
-    # Missing even one range may hide the true farthest point. Do not silently
-    # rank only the measurable subset and call it the complete candidate set.
+    # A known out-of-range corner is deliberately excluded from this working
+    # set, but remains in the detector output. Unknown ranging failures still
+    # prevent ranking a potentially incomplete set.
+    for corner in result.corners:
+        if not unique[corner.pixel].valid:
+            corner.reason = unique[corner.pixel].reason or 'unmeasurable'
+    unique = {point: r for point, r in unique.items()
+              if r.valid or r.reason != 'beyond_distance_limit'}
+    result.eligible_count = sum(r.valid for r in unique.values())
+    if not unique:
+        result.status = 'no_in_range_candidates'
+        return result
     if any(not r.valid or r.distance_mm is None
            or not all(v is not None and math.isfinite(v)
                       for v in (r.x_mm, r.y_mm, r.distance_mm))
@@ -131,8 +142,9 @@ def classify_bottom_edges(readings, boundary_result, config=None):
            for r in unique.values()):
         result.status = 'unmeasurable_or_wrong_plane'
         for corner in result.corners:
-            reading = unique[corner.pixel]
-            corner.reason = reading.reason or result.status
+            reading = unique.get(corner.pixel)
+            if reading is not None:
+                corner.reason = reading.reason or result.status
         return result
     by_pixel = result.by_pixel
     if len(unique) < 3:
