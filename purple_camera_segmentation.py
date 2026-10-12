@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from boundary_geometry import BoundaryConfig, PointGeometry, detect_boundaries, draw_boundary_result
+from bottom_edge_classifier import BottomEdgeConfig, BottomEdgeResult, classify_bottom_edges
 from preview_display import ParameterPanel, preview_dimensions, compose_preview
 from camera_orientation import ROTATION_CHOICES, rotate_frame
 from camera_profiles import CameraProfile, load_intrinsics, load_mount, load_profiles, verify_capture_format
@@ -1662,7 +1663,14 @@ def main() -> int:
     parser.add_argument("--stop-file", type=Path, default=None,
                         help="launcher session stop signal; normally managed by run_app.py")
     parser.add_argument("--parameters", action="store_true", help="show the detachable HSV parameter window at startup")
+    parser.add_argument("--bottom-edge-test", action=argparse.BooleanOptionalAction, default=True,
+                        help="experimental post-detection upper/lower classification (this test branch defaults on)")
+    parser.add_argument("--bottom-edge-tolerance-mm", type=int, default=30,
+                        help="bottom length/width matching tolerance, also adjustable in the parameter window")
     args = parser.parse_args()
+    if not 0 <= args.bottom_edge_tolerance_mm <= 200:
+        parser.error("--bottom-edge-tolerance-mm must be between 0 and 200")
+    bottom_config = BottomEdgeConfig(tolerance_mm=args.bottom_edge_tolerance_mm)
     association_writer = None
     association_report = None
     if args.association_output is not None:
@@ -1681,6 +1689,14 @@ def main() -> int:
                                          include_inferred=args.range_inferred)
         print(f"body ranging enabled: camera={args.camera}, Z={args.target_z_mm:g}mm, "
               f"limit={args.range_max_mm:g}mm; inferred={args.range_inferred}", flush=True)
+    bottom_ranger = None
+    if args.bottom_edge_test and ranger is not None and ranger.target_z_mm == bottom_config.ground_z_mm:
+        from copy import copy
+        bottom_ranger = copy(ranger)
+        bottom_ranger.include_inferred = True
+        print(f"bottom-edge layer test: all visible/inferred corners projected to Z=0mm; "
+              f"L={bottom_config.length_mm:g} W={bottom_config.width_mm:g}mm, "
+              f"tolerance=+/-{bottom_config.tolerance_mm:g}mm", flush=True)
     requested_scene = args.scene
     scene = requested_scene if requested_scene != "auto" else "front-facing"
     camera_profile = CAMERA_PROFILES[args.camera]
@@ -1754,10 +1770,10 @@ def main() -> int:
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     preview_size = preview_dimensions((display_height, display_width))
     cv2.resizeWindow(window, *preview_size)
-    parameters = ParameterPanel(
-        {name: getattr(rules, field) for name, field in trackbar_fields.items()},
-        visible=args.parameters,
-    )
+    parameter_values = {name: getattr(rules, field) for name, field in trackbar_fields.items()}
+    if args.bottom_edge_test:
+        parameter_values['bottom tol mm'] = args.bottom_edge_tolerance_mm
+    parameters = ParameterPanel(parameter_values, visible=args.parameters)
 
     last_time = time.perf_counter()
     shown_fps = 0.0
@@ -1942,6 +1958,25 @@ def main() -> int:
                 ranger if args.ranging and args.target_z_mm == 0 else None,
                 corner_supports=frame_corner_supports if scene in ("front-facing", "general") else None,
             )
+            bottom_result = None
+            frame_ranger = ranger
+            if args.bottom_edge_test and scene in ("front-facing", "general"):
+                bottom_config = BottomEdgeConfig(tolerance_mm=parameters.get('bottom tol mm'))
+                if bottom_ranger is not None:
+                    frame_ranger = bottom_ranger
+                    range_readings = bottom_ranger.measure(recognitions, identities)
+                    bottom_result = classify_bottom_edges(
+                        range_readings, frame_boundary_result.get('result'), bottom_config)
+                else:
+                    range_readings = ranger.measure(recognitions, identities) if ranger is not None else []
+                    bottom_result = BottomEdgeResult(
+                        bottom_config, 'ground_ranging_required',
+                        len(all_visible_corners) + len(all_inferred_corners))
+                # Replace only the provisional reference ring, never detections.
+                reference_points = ({bottom_result.lower_seed}
+                                    if bottom_result.lower_seed is not None else set())
+            else:
+                range_readings = ranger.measure(recognitions, identities) if ranger is not None else []
             overlay = frame.copy()
             if scene in ("front-facing", "general"):
                 cv2.drawContours(overlay, [d[0][-1] for d in recognitions], -1, (255, 0, 0), 2)
@@ -1998,7 +2033,6 @@ def main() -> int:
                     cv2.circle(mask_bgr, (px, py), 6, (255, 0, 255), -1)
             for px, py in reference_points:
                 cv2.circle(mask_bgr, (px, py), 11, (255, 255, 0), 3)
-            range_readings = ranger.measure(recognitions, identities) if ranger is not None else []
             parameter_text = (
                 f"HSV H={h_low}-{h_high} S>={s_min} V>={v_min} | White S<={white_s_max} V>={white_v_min}"
                 if color_mode else "GRAYSCALE: colour segmentation unavailable"
@@ -2008,13 +2042,16 @@ def main() -> int:
                 size=preview_size,
                 title=f"{args.camera} | {scene} | FPS {shown_fps:.1f} | visible {len(all_visible_corners)} / estimated {len(all_inferred_corners)}",
                 parameters=parameter_text, pose_text=pose_text, status=identity_status,
-                boundary_result=frame_boundary_result.get("result"), ranger=ranger,
+                boundary_result=frame_boundary_result.get("result"), ranger=frame_ranger,
+                bottom_edge_result=bottom_result,
             )
             if ranger is not None:
                 from pose_association import association_payload
-                association_report = association_payload(args.camera, frame_count, ranger, range_readings,
+                association_report = association_payload(args.camera, frame_count, frame_ranger, range_readings,
                                                          selected_pose, identities, identity_templates,
                                                          scene, args.pose_file)
+                if bottom_result is not None:
+                    association_report['bottom_edge_test'] = bottom_result.payload()
                 if association_writer is not None:
                     association_writer.write(association_report)
             cv2.imshow(window, preview)
@@ -2044,7 +2081,9 @@ def main() -> int:
                     snapshot_preview = snapshot.with_suffix(".preview.png")
                     save_range_image(snapshot_raw, frame)
                     save_range_image(snapshot_preview, preview)
-                    payload = range_payload(args.camera, frame_count, ranger, range_readings)
+                    payload = range_payload(args.camera, frame_count, frame_ranger, range_readings)
+                    if bottom_result is not None:
+                        payload['bottom_edge_test'] = bottom_result.payload()
                     payload["pose_association"] = association_report
                     payload["created_utc"] = datetime.now(timezone.utc).isoformat()
                     payload["raw_image"] = str(snapshot_raw)

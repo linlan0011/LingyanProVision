@@ -41,6 +41,7 @@ class PointGeometry:
 class PixelLineSupport:
     fitted_start: np.ndarray
     fitted_end: np.ndarray
+    line_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -529,7 +530,7 @@ def extract_corners(result, config):
             supports = []
             for line in (first, second):
                 endpoints = config.point_geometry.to_pixels([line.fitted_start, line.fitted_end])
-                supports.append(PixelLineSupport(*endpoints))
+                supports.append(PixelLineSupport(*endpoints, line_id=line.line_id))
             result.corner_supports[tuple(map(int, rounded))] = tuple(supports)
         else:
             result.corner_supports[tuple(map(int, rounded))] = (first, second)
