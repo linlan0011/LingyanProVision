@@ -27,8 +27,7 @@ def camera():
         distortion_coefficients=[0.]*5, image_width=640,image_height=480,model='opencv_pinhole')
     mount = dict(rotation_camera_to_body=[[0.,0.,1.],[-1.,0.,0.],[0.,-1.,0.]],
                  camera_position_body_mm=[0.,0.,174.])
-    # Keep these FOV/association fixtures explicitly bounded; the application
-    # default is now unbounded until a reliable range cap is re-established.
+    # Keep FOV/association fixtures explicitly bounded independently of defaults.
     return CornerRanger(intrinsics,mount,0.,max_distance_mm=1000.,include_inferred=True)
 
 
@@ -142,6 +141,36 @@ class GroundAssociationTests(unittest.TestCase):
         landmarks=view.landmarks(prior,0.,self.model)
         self.assertEqual(len(landmarks),8)
         self.assertTrue(all(p['possibly_visible']for p in landmarks))
+
+    def test_bounded_view_reuses_cached_polygon_for_pose_radius_and_association(self):
+        cached=self.view.body_polygon.copy()
+        reading=measured(self.ranger,(540.,-330.))
+        with patch.object(self.view,'_body_polygon',side_effect=AssertionError(
+                'bounded frame must reuse calibrated body polygon')) as rebuild:
+            for prior in (Pose2D(1500.,2100.,90.),Pose2D(1500.,900.,-90.),
+                          Pose2D(1500.,1490.,90.),Pose2D(1700.,1700.,45.)):
+                for radius in (0.,200.,500.):
+                    with self.subTest(prior=prior,radius=radius):
+                        expected=cached@heading_rotation(prior.heading_deg).T+[prior.x_mm,prior.y_mm]
+                        np.testing.assert_allclose(self.view.footprint(prior),expected)
+                        # A larger display/map extent cannot expand a bounded
+                        # camera's localization footprint or force new clipping.
+                        np.testing.assert_allclose(self.view.footprint(prior,extent_mm=50000.),expected)
+                        landmarks=self.view.landmarks(prior,radius,self.model)
+                        contour=expected.astype(np.float32).reshape(-1,1,2)
+                        for landmark in landmarks:
+                            distance=-cv2.pointPolygonTest(contour,
+                                tuple(map(float,landmark['map_xy_mm'])),True)
+                            self.assertEqual(landmark['possibly_visible'],distance<=radius+1e-4)
+                        identities,report=associate_ground_corners([reading],lower_layers([reading]),
+                            prior,self.model,self.view,GroundAssociationConfig(prior_radius_mm=radius))
+                        np.testing.assert_allclose(report['central_footprint_map_mm'],expected)
+                        self.assertEqual(report['landmarks'],landmarks)
+                        if radius in (0.,200.) and prior.y_mm in (2100.,900.):
+                            self.assertEqual(identities[0].corner_id,
+                                             '1.3' if prior.y_mm==2100. else '2.1')
+            rebuild.assert_not_called()
+        np.testing.assert_array_equal(self.view.body_polygon,cached)
 
     def test_distorted_border_footprint_contains_valid_ground_rays(self):
         self.ranger.distortion=np.array([.15,-.2,.002,-.002,.08])
@@ -316,7 +345,7 @@ class GroundPipelineTests(unittest.TestCase):
         args=build_parser().parse_args(['--pose-radius-mm','200'])
         command=vision_command(args,Path('stop'))
         self.assertEqual(command[command.index('--pose-radius-mm')+1],'200')
-        self.assertNotIn('--range-max-mm',command)
+        self.assertEqual(float(command[command.index('--range-max-mm')+1]),1000.)
         self.assertIn('--ground-association',command)
         bounded=vision_command(build_parser().parse_args(['--range-max-mm','1000']),Path('stop'))
         self.assertEqual(float(bounded[bounded.index('--range-max-mm')+1]),1000.)
@@ -366,6 +395,82 @@ class GroundPipelineTests(unittest.TestCase):
         self.assertEqual(data['ground_association']['config']['prior_radius_mm'],200.)
         self.assertEqual(data['ground_association']['status'],'unique')
         self.assertFalse(data['pose_corrected'])
+        self.assertFalse(ranger.include_inferred)
+
+    def test_usb_profile_default_cap_retains_full_ranking_before_simulated_pose_match(self):
+        import purple_camera_segmentation as vision
+        from copy import copy
+        from pose_io import write_pose_atomic
+        from test_bottom_edge_classifier import graph
+        ranger=camera()
+        ranger.include_inferred=False
+        ranger.matrix=np.array([[900.,0.,960.],[0.,675.,540.],[0.,0.,1.]])
+        ranger.size=(1920,1080)
+        extended=copy(ranger)
+        extended.include_inferred=True
+        extended.max_distance_mm=2500.
+        geometric=[measured(extended,(1600.,0.),True),
+                   measured(extended,(1300.,100.)),
+                   measured(extended,(540.,-330.)),
+                   measured(extended,(1200.,-330.),True)]
+        keys=[tuple(map(int,np.rint(r.pixel)))for r in geometric]
+        supports=graph(keys[:2],keys[2:])
+        visible=[(keys[i],90.)for i in (1,2)]
+        hidden=[(keys[i],90.)for i in (0,3)]
+        frame=np.full((1080,1920,3),235,np.uint8)
+        cv2.rectangle(frame,(250,580),(1700,1000),(140,30,140),-1)
+        class Camera:
+            def read(self):return True,frame.copy()
+            def getBackendName(self):return 'MSMF'
+            def get(self,prop):
+                return {cv2.CAP_PROP_FRAME_WIDTH:1920.,
+                        cv2.CAP_PROP_FRAME_HEIGHT:1080.,
+                        cv2.CAP_PROP_FPS:30.,
+                        cv2.CAP_PROP_FOURCC:float(cv2.VideoWriter_fourcc(*'MJPG'))}.get(prop,0.)
+            def release(self):pass
+        def detector(*args,**kwargs):
+            kwargs['boundary_result']['result']=supports
+            return visible,hidden
+        trackbars={}
+        with tempfile.TemporaryDirectory() as directory,patch('pose_association.PROJECT',Path(directory)):
+            pose=Path(directory)/'pose.json'
+            write_pose_atomic(pose,Pose2D(1500.,2100.,90.))
+            before=pose.read_bytes()
+            output=Path(directory)/'output/association/usb0bda3035_1080p/latest.json'
+            argv=['vision','--camera','usb0bda3035_1080p','--scene','front-facing',
+                  '--ranging','--target-z-mm','0','--pose-file',str(pose),
+                  '--association-output',str(output),'--parameters']
+            with patch('sys.argv',argv),patch.object(vision,'open_camera',return_value=Camera()), \
+                 patch('corner_ranging.CornerRanger.from_camera',return_value=ranger), \
+                 patch.object(vision,'find_effective_boundary_corners',side_effect=detector), \
+                 patch.object(vision,'draw_boundary_result'), \
+                 patch.object(vision,'compose_preview',return_value=frame), \
+                 patch.object(vision,'classify_bottom_edges',wraps=classify_bottom_edges) as classify, \
+                 patch.object(cv2,'namedWindow'),patch.object(cv2,'resizeWindow'), \
+                 patch.object(cv2,'createTrackbar',side_effect=lambda n,w,v,*_:trackbars.update({n:v})), \
+                 patch.object(cv2,'getTrackbarPos',side_effect=lambda n,w:trackbars[n]), \
+                 patch.object(cv2,'getWindowProperty',return_value=1),patch.object(cv2,'imshow'), \
+                 patch.object(cv2,'waitKey',return_value=ord('q')),patch.object(cv2,'destroyAllWindows'):
+                self.assertEqual(vision.main(),0)
+                ranked=classify.call_args.kwargs['ranking_readings']
+                self.assertEqual(len(ranked),4)
+                self.assertTrue(all(r.valid and r.geometry_only for r in ranked))
+                self.assertEqual(sum(r.valid for r in classify.call_args.args[0]),1)
+            data=json.loads(output.read_text(encoding='utf-8'))
+            self.assertEqual(pose.read_bytes(),before)
+        layers=data['bottom_edge_test']
+        self.assertEqual(data['max_distance_mm'],1000.)
+        self.assertEqual(layers['candidate_count'],4)
+        self.assertEqual(layers['ranking_count'],4)
+        self.assertEqual(layers['eligible_count'],1)
+        self.assertEqual(layers['upper_seed'],list(keys[0]))
+        self.assertEqual(layers['lower_seed'],list(keys[2]))
+        self.assertEqual(layers['upper_count'],2)
+        self.assertEqual(layers['lower_count'],2)
+        self.assertEqual(data['confirmed_corner_ids'],['1.3'])
+        self.assertFalse(data['pose_corrected'])
+        self.assertTrue(all(not r['geometry_only']for r in data['corners']))
+        self.assertEqual(len(data['ground_association']['observations']),1)
         self.assertFalse(ranger.include_inferred)
 
     def test_map_shows_prior_and_view_and_clears_when_simulated_pose_changes(self):

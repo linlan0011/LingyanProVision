@@ -1636,7 +1636,7 @@ def main() -> int:
     parser.add_argument("--ranging", action="store_true", help="enable calibrated body-frame corner ranging")
     parser.add_argument("--target-z-mm", type=float, help="required known corner height when ranging; ground=0")
     parser.add_argument("--range-max-mm", type=float, default=DEFAULT_MAX_DISTANCE_MM,
-                        help="optional maximum horizontal body-origin corner range; default unlimited")
+                        help="maximum horizontal body-origin localization range; default 1000 mm")
     parser.add_argument("--range-inferred", action="store_true", help="also range inferred corners, explicitly labelled estimates")
     parser.add_argument("--association-output", type=Path,
                         help="read-only simulated pose / corner identity / range feedback file")

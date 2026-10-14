@@ -109,6 +109,8 @@ class CalibratedGroundView:
         return polygon
 
     def map_extent(self, prior, radius, model):
+        if self.ranger.max_distance_mm is not None:
+            return self.ranger.max_distance_mm
         center = np.array([prior.x_mm, prior.y_mm])
         distances = [np.linalg.norm(np.asarray(point)-center)
                      for zone in model['safety_zones'] for point in map_corners(zone)]
@@ -137,7 +139,10 @@ class CalibratedGroundView:
                     -margin <= pixel[1] <= height-1+margin)
 
     def footprint(self, prior, *, extent_mm=None):
-        polygon = self.body_polygon if extent_mm is None else self._body_polygon(extent_mm)
+        # With a fixed range cap the body-frame footprint is constant. Reuse
+        # the startup result, including when callers supply a map extent.
+        polygon = (self.body_polygon if self.ranger.max_distance_mm is not None or extent_mm is None
+                   else self._body_polygon(extent_mm))
         return polygon @ heading_rotation(prior.heading_deg).T + [prior.x_mm, prior.y_mm]
 
     def landmarks(self, prior, radius, model):

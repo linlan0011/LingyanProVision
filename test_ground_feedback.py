@@ -43,7 +43,7 @@ def report():
             inferred=False, range_mm=630.)], landmarks=[dict(
             corner_id='1.3', map_xy_mm=[1830., 2640.], possibly_visible=True)],
         vision_vehicle_position_mm=[1500., 2100.], status='unique',
-        max_distance_mm=None, possible_safety_ids=[1]))
+        max_distance_mm=1000., possible_safety_ids=[1]))
 
 
 class GroundFeedbackTests(unittest.TestCase):
@@ -62,7 +62,7 @@ class GroundFeedbackTests(unittest.TestCase):
         self.assertEqual(len(candidates), 3)
         self.assertIn('回传帧：417；反馈年龄：2.5 s（非拍摄时间）', summary)
         self.assertIn('视觉反算候选：(1500.0, 2100.0) mm（未反写位姿）', summary)
-        self.assertIn('量程：不限距离', summary)
+        self.assertIn('量程：1000 mm', summary)
         self.assertEqual(data, before)
 
     def test_no_confirmed_ids_rejects_stale_position_field(self):
@@ -109,6 +109,12 @@ class GroundFeedbackTests(unittest.TestCase):
         data['ground_association']['status'] = 'calibration_unavailable'
         self.assertIn('等待地面测距', self.draw(data)[0])
 
+    def test_explicit_unlimited_feedback_remains_supported(self):
+        data=report()
+        data['ground_association']['max_distance_mm']=None
+        summary,_=self.draw(data)
+        self.assertIn('量程：不限距离',summary)
+
     def test_none_position_does_not_leave_candidate_mark(self):
         data = report()
         data['ground_association']['vision_vehicle_position_mm'] = None
@@ -127,6 +133,12 @@ class GroundFeedbackTests(unittest.TestCase):
 
 
 class LauncherFeedbackTests(unittest.TestCase):
+    def test_default_command_restores_one_metre_localization_cap(self):
+        args=run_app.build_parser().parse_args([])
+        command=run_app.vision_command(args,Path('stop'))
+        self.assertEqual(args.range_max_mm,1000.)
+        self.assertEqual(command[command.index('--range-max-mm')+1],'1000.0')
+
     def test_unlimited_command_omits_range_argument_and_numeric_override_survives(self):
         args = run_app.build_parser().parse_args([])
         args.range_max_mm = None

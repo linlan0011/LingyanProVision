@@ -21,24 +21,36 @@ def fixture(**kwargs):
                  "image_width": 640, "image_height": 480, "model": "opencv_pinhole"}
     mount = {"rotation_camera_to_body": [[0., 0., 1.], [-1., 0., 0.], [0., -1., 0.]],
              "camera_position_body_mm": [0., 0., 300.]}
-    # Generic fixtures retain an explicit 2 m cap so limit-rejection tests stay
-    # independent of the temporarily unlimited production default.
+    # Generic fixtures retain an explicit 2 m cap so geometric tests stay
+    # independent of the application's restored 1 m default.
     return CornerRanger(intrinsic, mount, kwargs.pop("target_z_mm", 0.),
                         max_distance_mm=kwargs.pop('max_distance_mm', 2000.), **kwargs)
 
 
 class RangingTests(unittest.TestCase):
-    def test_default_unlimited_range_measures_points_beyond_one_metre(self):
-        self.assertIsNone(DEFAULT_MAX_DISTANCE_MM)
+    def test_default_one_metre_limit_rejects_distant_points_but_preserves_ranking_geometry(self):
+        self.assertEqual(DEFAULT_MAX_DISTANCE_MM,1000.)
         ranger = fixture(max_distance_mm=DEFAULT_MAX_DISTANCE_MM, include_inferred=True)
         for inferred in (False, True):
             for pixel in ((400., 360.), (320., 300.)):
                 with self.subTest(inferred=inferred, pixel=pixel):
                     result = ranger.project(pixel, inferred=inferred)
-                    self.assertTrue(result.valid)
-                    self.assertGreater(result.distance_mm, 1000.)
+                    self.assertFalse(result.valid)
+                    self.assertEqual(result.reason,'beyond_distance_limit')
                     self.assertFalse(result.geometry_only)
-        self.assertIsNone(range_payload('cam', 1, ranger, [])['max_distance_mm'])
+                    geometric=ranger.project(pixel,inferred=inferred,enforce_distance_limit=False)
+                    self.assertTrue(geometric.valid)
+                    self.assertGreater(geometric.distance_mm,1000.)
+                    self.assertTrue(geometric.geometry_only)
+        self.assertEqual(range_payload('cam', 1, ranger, [])['max_distance_mm'],1000.)
+
+    def test_explicit_unlimited_range_remains_available(self):
+        ranger=fixture(max_distance_mm=None,include_inferred=True)
+        result=ranger.project((400.,360.),inferred=True)
+        self.assertTrue(result.valid)
+        self.assertGreater(result.distance_mm,1000.)
+        self.assertFalse(result.geometry_only)
+        self.assertIsNone(range_payload('cam',1,ranger,[])['max_distance_mm'])
 
     def test_explicit_one_metre_range_is_inclusive_for_visible_and_inferred(self):
         ranger = fixture(max_distance_mm=1000., include_inferred=True)
@@ -181,8 +193,8 @@ class RangingTests(unittest.TestCase):
         self.assertEqual(args.camera,"usb0bda3035_1080p")
         self.assertIn("--ranging",command)
         self.assertEqual(command[command.index("--target-z-mm")+1],"0.0")
-        self.assertIsNone(args.range_max_mm)
-        self.assertNotIn('--range-max-mm', command)
+        self.assertEqual(args.range_max_mm,1000.)
+        self.assertEqual(command[command.index('--range-max-mm')+1],'1000.0')
         disabled = vision_command(build_parser().parse_args(["--camera","lingyan","--no-ranging"]),Path("stop"))
         self.assertNotIn("--ranging",disabled)
         self.assertNotIn("--association-output",disabled)

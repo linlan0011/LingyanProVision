@@ -13,8 +13,8 @@ from calibration.ground_project import pixel_to_body_plane
 from calibration.lens_models import undistort_points
 from camera_profiles import load_intrinsics, load_mount, file_sha256
 
-# None temporarily disables the distance cap; projection validity still applies.
-DEFAULT_MAX_DISTANCE_MM = None
+# Localization uses the original one-metre cap; layer ranking is independent.
+DEFAULT_MAX_DISTANCE_MM = 1000.
 
 
 @dataclass(frozen=True)
