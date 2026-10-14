@@ -52,8 +52,9 @@ def vision_command(args, stop_file):
     if args.ranging:
         if args.target_z_mm is None:
             raise ValueError('实时测距需指定角点高度 --target-z-mm；地面点填 0')
-        command.extend(('--ranging', '--target-z-mm', str(args.target_z_mm),
-                        '--range-max-mm', str(args.range_max_mm)))
+        command.extend(('--ranging', '--target-z-mm', str(args.target_z_mm)))
+        if args.range_max_mm is not None:
+            command.extend(('--range-max-mm', str(args.range_max_mm)))
         if args.range_inferred:
             command.append('--range-inferred')
         from pose_association import association_output_path
@@ -114,6 +115,7 @@ def main(argv=None):
             if monitor_job is not None:
                 root.after_cancel(monitor_job)
                 monitor_job = None
+            app.set_live_association(None)
             app.close()
 
         def monitor():
@@ -126,13 +128,15 @@ def main(argv=None):
                     app.set_live_association(read_live_association(
                         association_output, args.camera, started_at, app.pose))
                 monitor_job = root.after(200, monitor)
-            elif code == 0:
-                close_all()
             else:
-                exit_code = code
-                app.status_var.set(f'相机程序退出（{code}）；日志：{log_path.name}')
-                messagebox.showerror('相机未正常运行',
-                    f'请检查相机连接、是否被其他程序占用，以及相机序号。\n\n日志：{log_path}', parent=root)
+                app.set_live_association(None)
+                if code == 0:
+                    close_all()
+                else:
+                    exit_code = code
+                    app.status_var.set(f'相机程序退出（{code}）；旧识别已清空；日志：{log_path.name}')
+                    messagebox.showerror('相机未正常运行',
+                        f'请检查相机连接、是否被其他程序占用，以及相机序号。\n\n日志：{log_path}', parent=root)
 
         root.protocol('WM_DELETE_WINDOW', close_all)
         try:
@@ -148,6 +152,7 @@ def main(argv=None):
             root.mainloop()
         except OSError as exc:
             exit_code = 1
+            app.set_live_association(None)
             messagebox.showerror('启动失败', str(exc), parent=root)
         finally:
             stop_vision(process, stop_file)

@@ -1,0 +1,34 @@
+# Local camera captures, screenshots and diagnostic images.
+/照片/*
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.PNG
+*.JPG
+*.JPEG
+*.BMP
+*.TIF
+*.TIFF
+*.WEBP
+
+# Required map resource used by the pose selector.
+!照片/field_map.png
+
+# Local runtime and diagnostic logs.
+*.log
+*.log.*
+*.LOG
+
+# Generated feedback, replay results and temporary diagnostics.
+/output/association/
+/output/deferred_pose_correction/
+/outputs/
+/tmp/
+
+# Generated Python caches (existing tracked files are left unchanged).
+__pycache__/
+*.py[cod]

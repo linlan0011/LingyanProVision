@@ -82,28 +82,45 @@ class CalibratedGroundView:
         # Dense border samples + outward margin avoid an inward approximation
         # at curved image edges. Convexification may retain extra candidates.
         angular_margin = (image_margin_px+1.) / min(ranger.matrix[0, 0], ranger.matrix[1, 1])
-        angles = np.arange(128) * 2*math.pi/128
-        radius = ranger.max_distance_mm / math.cos(math.pi/128)
-        polygon = np.c_[np.cos(angles), np.sin(angles)] * radius
         camera_rotation = ranger.rotation.T
         camera_offset = -camera_rotation @ ranger.center
-        polygon = _clip_polygon(polygon, np.array([1., 0.]), 0.)
-        polygon = _clip_polygon(polygon, camera_rotation[2, :2], camera_offset[2]-1e-6)
+        self.halfplanes = [(np.array([1., 0.]), 0.),
+                           (camera_rotation[2, :2], camera_offset[2]-1e-6)]
         for first, second in zip(hull, np.roll(hull, -1, axis=0)):
             dx, dy = second-first
             normal = np.array([-dy, dx])
             offset = -normal @ first + angular_margin*np.linalg.norm(normal)
             weights = np.r_[normal, offset]
-            polygon = _clip_polygon(polygon, weights @ camera_rotation[:, :2],
-                                    float(weights @ camera_offset))
-        self.body_polygon = polygon
+            self.halfplanes.append((weights @ camera_rotation[:, :2],
+                                    float(weights @ camera_offset)))
+        # An unlimited frustum may be unbounded at the horizon. The map-facing
+        # footprint is cropped dynamically to cover EVERY map landmark plus
+        # the prior disk. This finite computation window is not a range gate.
+        self.body_polygon = self._body_polygon(ranger.max_distance_mm or 10000.)
+
+    def _body_polygon(self, extent_mm):
+        radius = self.ranger.max_distance_mm
+        if radius is None:
+            radius = extent_mm
+        angles = np.arange(128) * 2*math.pi/128
+        polygon = np.c_[np.cos(angles), np.sin(angles)] * radius / math.cos(math.pi/128)
+        for normal, offset in self.halfplanes:
+            polygon = _clip_polygon(polygon, normal, offset)
+        return polygon
+
+    def map_extent(self, prior, radius, model):
+        center = np.array([prior.x_mm, prior.y_mm])
+        distances = [np.linalg.norm(np.asarray(point)-center)
+                     for zone in model['safety_zones'] for point in map_corners(zone)]
+        return float(max(distances, default=0.) + radius + 1.)
 
     def contains_body(self, xy):
         """Exact calibrated image/range check for a particular body point."""
         xy = np.asarray(xy, float)
         if not np.isfinite(xy).all() or xy[0] <= 0:
             return False
-        if np.linalg.norm(xy) > self.ranger.max_distance_mm + 1e-6:
+        if (self.ranger.max_distance_mm is not None
+                and np.linalg.norm(xy) > self.ranger.max_distance_mm + 1e-6):
             return False
         body = np.r_[xy, 0.]
         camera = self.ranger.rotation.T @ (body-self.ranger.center)
@@ -119,11 +136,12 @@ class CalibratedGroundView:
                     -margin <= pixel[0] <= width-1+margin and
                     -margin <= pixel[1] <= height-1+margin)
 
-    def footprint(self, prior):
-        return self.body_polygon @ heading_rotation(prior.heading_deg).T + [prior.x_mm, prior.y_mm]
+    def footprint(self, prior, *, extent_mm=None):
+        polygon = self.body_polygon if extent_mm is None else self._body_polygon(extent_mm)
+        return polygon @ heading_rotation(prior.heading_deg).T + [prior.x_mm, prior.y_mm]
 
     def landmarks(self, prior, radius, model):
-        polygon = self.footprint(prior)
+        polygon = self.footprint(prior, extent_mm=self.map_extent(prior, radius, model))
         contour = polygon.astype(np.float32).reshape(-1, 1, 2)
         result = []
         for zone in model['safety_zones']:
@@ -211,7 +229,10 @@ def associate_ground_corners(readings, layers, prior, model, view, config=None):
     landmarks = view.landmarks(prior, config.prior_radius_mm, model)
     report['landmarks'] = landmarks
     report['possible_safety_ids'] = sorted({p['safety_id'] for p in landmarks if p['possibly_visible']})
-    footprint = view.footprint(prior)
+    extent = view.map_extent(prior, config.prior_radius_mm, model)
+    report['footprint_computation_extent_mm'] = extent
+    report['range_limit_enabled'] = view.ranger.max_distance_mm is not None
+    footprint = view.footprint(prior, extent_mm=extent)
     report['central_footprint_map_mm'] = footprint.tolist()
     if len(footprint):
         angles = np.arange(64)*2*math.pi/64
@@ -229,7 +250,9 @@ def associate_ground_corners(readings, layers, prior, model, view, config=None):
             continue
         identity = identities[index]
         identity.reason = 'invalid_ground_range'
-        if (not reading.valid or reading.distance_mm is None or reading.x_mm is None
+        if (not reading.valid or getattr(reading, 'geometry_only', False)
+                or not getattr(layer, 'localization_eligible', True)
+                or reading.distance_mm is None or reading.x_mm is None
                 or reading.y_mm is None or reading.z_mm is None
                 or not math.isclose(reading.z_mm, 0., abs_tol=1e-5)
                 or not view.contains_body([reading.x_mm, reading.y_mm])):

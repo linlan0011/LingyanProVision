@@ -1636,7 +1636,7 @@ def main() -> int:
     parser.add_argument("--ranging", action="store_true", help="enable calibrated body-frame corner ranging")
     parser.add_argument("--target-z-mm", type=float, help="required known corner height when ranging; ground=0")
     parser.add_argument("--range-max-mm", type=float, default=DEFAULT_MAX_DISTANCE_MM,
-                        help="maximum horizontal body-origin corner range; default 1000 mm")
+                        help="optional maximum horizontal body-origin corner range; default unlimited")
     parser.add_argument("--range-inferred", action="store_true", help="also range inferred corners, explicitly labelled estimates")
     parser.add_argument("--association-output", type=Path,
                         help="read-only simulated pose / corner identity / range feedback file")
@@ -1700,8 +1700,9 @@ def main() -> int:
         ranger = CornerRanger.from_camera(args.camera, target_z_mm=args.target_z_mm,
                                          max_distance_mm=args.range_max_mm,
                                          include_inferred=args.range_inferred)
+        range_limit = 'unlimited' if args.range_max_mm is None else f'{args.range_max_mm:g}mm'
         print(f"body ranging enabled: camera={args.camera}, Z={args.target_z_mm:g}mm, "
-              f"limit={args.range_max_mm:g}mm; inferred={args.range_inferred}", flush=True)
+              f"limit={range_limit}; inferred={args.range_inferred}", flush=True)
     bottom_ranger = None
     if args.bottom_edge_test and ranger is not None and ranger.target_z_mm == bottom_config.ground_z_mm:
         from copy import copy
@@ -1991,8 +1992,13 @@ def main() -> int:
                 if bottom_ranger is not None:
                     frame_ranger = bottom_ranger
                     range_readings = bottom_ranger.measure(recognitions, identities)
+                    # Layer order uses all geometric projections, even when an
+                    # optional localization cap is explicitly configured.
+                    ranking_readings = (bottom_ranger.measure_geometry(recognitions, identities)
+                                        if bottom_ranger.max_distance_mm is not None else range_readings)
                     bottom_result = classify_bottom_edges(
-                        range_readings, frame_boundary_result.get('result'), bottom_config)
+                        range_readings, frame_boundary_result.get('result'), bottom_config,
+                        ranking_readings=ranking_readings)
                 else:
                     range_readings = ranger.measure(recognitions, identities) if ranger is not None else []
                     bottom_result = BottomEdgeResult(

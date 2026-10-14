@@ -13,7 +13,8 @@ from calibration.ground_project import pixel_to_body_plane
 from calibration.lens_models import undistort_points
 from camera_profiles import load_intrinsics, load_mount, file_sha256
 
-DEFAULT_MAX_DISTANCE_MM = 1000.
+# None temporarily disables the distance cap; projection validity still applies.
+DEFAULT_MAX_DISTANCE_MM = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class CornerRange:
     distance_mm: float | None = None
     bearing_deg: float | None = None
     corner_id: str | None = None
+    geometry_only: bool = False
 
 
 class CornerRanger:
@@ -36,7 +38,7 @@ class CornerRanger:
                  min_plane_angle_deg=3., include_inferred=False):
         if not math.isfinite(target_z_mm):
             raise ValueError("target height must be finite")
-        if not math.isfinite(max_distance_mm) or max_distance_mm <= 0:
+        if max_distance_mm is not None and (not math.isfinite(max_distance_mm) or max_distance_mm <= 0):
             raise ValueError("maximum ranging distance must be positive and finite")
         if not math.isfinite(min_plane_angle_deg) or not 0 < min_plane_angle_deg < 90:
             raise ValueError("minimum ray/plane angle must be between 0 and 90 degrees")
@@ -46,7 +48,7 @@ class CornerRanger:
         self.size = (int(intrinsics["image_width"]), int(intrinsics["image_height"]))
         self.model = intrinsics["model"]
         self.target_z_mm = float(target_z_mm)
-        self.max_distance_mm = float(max_distance_mm)
+        self.max_distance_mm = float(max_distance_mm) if max_distance_mm is not None else None
         self.min_sine = math.sin(math.radians(min_plane_angle_deg))
         self.include_inferred = include_inferred
         self.sources = []
@@ -66,10 +68,11 @@ class CornerRanger:
         except OSError:
             return False
 
-    def project(self, pixel, *, label="", inferred=False):
+    def project(self, pixel, *, label="", inferred=False, enforce_distance_limit=True):
         pixel = tuple(map(float, pixel))
         def reject(reason):
-            return CornerRange(label, pixel, inferred, False, reason)
+            return CornerRange(label, pixel, inferred, False, reason,
+                               geometry_only=not enforce_distance_limit)
         if len(pixel) != 2 or not all(math.isfinite(v) for v in pixel):
             return reject("invalid_pixel")
         if not (0 <= pixel[0] < self.size[0] and 0 <= pixel[1] < self.size[1]):
@@ -88,15 +91,24 @@ class CornerRanger:
             if point[0] <= 0:
                 return reject("behind_body_origin")
             distance = math.hypot(point[0], point[1])
-            if distance > self.max_distance_mm + 1e-6:
+            if (enforce_distance_limit and self.max_distance_mm is not None
+                    and distance > self.max_distance_mm + 1e-6):
                 return reject("beyond_distance_limit")
             return CornerRange(label, pixel, inferred, True, "estimated" if inferred else "",
                                *map(float, point), distance,
-                               math.degrees(math.atan2(point[1], point[0])))
+                               math.degrees(math.atan2(point[1], point[0])),
+                               geometry_only=not enforce_distance_limit)
         except (ValueError, cv2.error):
             return reject("no_forward_plane_intersection")
 
     def measure(self, recognitions, identities=()):
+        return self._measure(recognitions, identities, enforce_distance_limit=True)
+
+    def measure_geometry(self, recognitions, identities=()):
+        """Project all candidates for layer ranking, independently of any cap."""
+        return self._measure(recognitions, identities, enforce_distance_limit=False)
+
+    def _measure(self, recognitions, identities, *, enforce_distance_limit):
         names = {tuple(r.observation.point): r.corner_id for r in identities if r.corner_id}
         readings = []
         seen = set()
@@ -113,7 +125,8 @@ class CornerRanger:
                     if names.get(pixel):
                         label += f"/{names[pixel]}"
                     reading = (CornerRange(label, pixel, inferred, False, "calibration_changed")
-                               if changed else self.project(pixel, label=label, inferred=inferred))
+                               if changed else self.project(pixel, label=label, inferred=inferred,
+                                                            enforce_distance_limit=enforce_distance_limit))
                     if names.get(pixel):
                         reading = replace(reading, corner_id=names[pixel])
                     readings.append(reading)
@@ -201,7 +214,8 @@ def append_range_panel(preview, ranger, readings):
     colour_width = min(preview.shape[1],round(ranger.size[0]*display_scale))
     draw_range_tags(preview[:,:colour_width],readings,pixel_scale=display_scale,font_scale=.60)
     panel = np.full((224, preview.shape[1], 3), 24, dtype=np.uint8)
-    lines = [(f"BODY RANGE: Z={ranger.target_z_mm:g}mm | limit={ranger.max_distance_mm:g}mm | "
+    limit = 'unlimited' if ranger.max_distance_mm is None else f'{ranger.max_distance_mm:g}mm'
+    lines = [(f"BODY RANGE: Z={ranger.target_z_mm:g}mm | limit={limit} | "
               "X forward, Y left | estimates, not field pose", (230, 230, 230))]
     if not ranger.check_sources():
         lines.append(("DISABLED: calibration changed; restart with matching files", (0, 80, 255)))

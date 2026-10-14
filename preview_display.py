@@ -113,7 +113,8 @@ def _corner_labels(image, recognitions, identities, readings, pixel_scale, botto
                 if reading is not None and reading.valid:
                     lines.append(f"r={reading.distance_mm:.0f}mm")
                 elif reading is not None and reading.reason == 'beyond_distance_limit':
-                    lines.append('OUT OF RANGE')
+                    lines.append(f'geom r={layer.range_mm:.0f}mm | rank only'
+                                 if layer is not None and layer.range_mm is not None else 'OUT OF RANGE')
                 if layer is not None and layer.distance_to_seed_mm is not None:
                     lines.append(f"to LOW*={layer.distance_to_seed_mm:.0f}mm e={layer.edge_error_mm:.0f}")
                 text_width = max(cv2.getTextSize(t,cv2.FONT_HERSHEY_SIMPLEX,.70,2)[0][0] for t in lines)
@@ -178,7 +179,7 @@ def compose_preview(overlay, mask_image, recognitions, identities, readings, *,
         +(f' | Z={ranger.target_z_mm:g}' if ranger is not None else ''),(100,255,120),.65,28)
     if bottom_edge_result is not None:
         test = bottom_edge_result
-        row(f'LAYER: N={test.eligible_count}/{test.candidate_count} UP={test.upper_count} LOW={test.lower_count}',
+        row(f'LAYER: N={test.ranking_count}/{test.candidate_count} UP={test.upper_count} LOW={test.lower_count}',
             (100,255,255),.54,23)
         row(f'L={test.config.length_mm:g} W={test.config.width_mm:g} tol=+/-{test.config.tolerance_mm:g}mm',
             scale=.51,advance=21)
@@ -188,7 +189,10 @@ def compose_preview(overlay, mask_image, recognitions, identities, readings, *,
         association = ground_association
         radius = association['config']['prior_radius_mm']
         limit = association['max_distance_mm']
-        row(f'MAP: R={radius:g}mm range<={limit:g}mm' if limit is not None else 'MAP: ranging required',
+        range_text = (f'range<={limit:g}mm' if limit is not None else 'range unlimited')
+        if association['status'] == 'calibration_unavailable':
+            range_text = 'ranging required'
+        row(f'MAP: R={radius:g}mm {range_text}',
             (100,255,120),.51,21)
         row(association['status']+f" | {association['hypothesis_count']} hypotheses",scale=.49,advance=21)
     row('BLUE contour / GREEN observed / RED fit',scale=.51,advance=23)

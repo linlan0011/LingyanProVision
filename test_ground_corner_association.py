@@ -27,7 +27,9 @@ def camera():
         distortion_coefficients=[0.]*5, image_width=640,image_height=480,model='opencv_pinhole')
     mount = dict(rotation_camera_to_body=[[0.,0.,1.],[-1.,0.,0.],[0.,-1.,0.]],
                  camera_position_body_mm=[0.,0.,174.])
-    return CornerRanger(intrinsics,mount,0.,include_inferred=True)
+    # Keep these FOV/association fixtures explicitly bounded; the application
+    # default is now unbounded until a reliable range cap is re-established.
+    return CornerRanger(intrinsics,mount,0.,max_distance_mm=1000.,include_inferred=True)
 
 
 def measured(ranger, xy, inferred=False):
@@ -43,7 +45,8 @@ def measured(ranger, xy, inferred=False):
 def lower_layers(readings):
     result=BottomEdgeResult(BottomEdgeConfig(),'nearest_fallback',len(readings),eligible_count=len(readings))
     result.corners=[LayerCorner(tuple(map(int,np.rint(r.pixel))),r.inferred,r.distance_mm,
-                               'lower_seed' if i==0 else 'lower')for i,r in enumerate(readings)]
+                               'lower_seed' if i==0 else 'lower',
+                               localization_eligible=True)for i,r in enumerate(readings)]
     return result
 
 
@@ -113,6 +116,33 @@ class GroundAssociationTests(unittest.TestCase):
         self.assertFalse(self.view.contains_body((1001,0)))
         self.assertGreater(len(self.view.body_polygon),3)
 
+    def test_unlimited_view_keeps_valid_ground_points_beyond_one_meter(self):
+        self.ranger.max_distance_mm=None
+        view=CalibratedGroundView(self.ranger)
+        self.assertTrue(view.contains_body((1001.,0.)))
+        self.assertTrue(view.contains_body((2000.,0.)))
+        self.assertTrue(measured(self.ranger,(2000.,0.)).valid)
+        # With zero prior radius, 1.3 was outside the old 1000 mm disk.
+        landmarks=view.landmarks(Pose2D(1500,1490,90),0.,self.model)
+        self.assertTrue(next(p for p in landmarks if p['corner_id']=='1.3')['possibly_visible'])
+
+    def test_unlimited_landmark_view_dynamically_covers_map_beyond_display_window(self):
+        self.ranger.max_distance_mm=None
+        view=CalibratedGroundView(self.ranger)
+        prior=Pose2D(1500.,-30000.,90.)
+        rotation=heading_rotation(prior.heading_deg)
+        center=np.array([prior.x_mm,prior.y_mm])
+        # Every corner is forward and projects inside the calibrated image,
+        # even though all are beyond the default finite display footprint.
+        corners=[np.asarray(point)for zone in self.model['safety_zones']
+                 for point in map_corners(zone)]
+        self.assertTrue(all(np.linalg.norm(point-center)>10000. for point in corners))
+        self.assertTrue(all(view.contains_body(rotation.T@(point-center))for point in corners))
+        self.assertGreater(view.map_extent(prior,0.,self.model),30000.)
+        landmarks=view.landmarks(prior,0.,self.model)
+        self.assertEqual(len(landmarks),8)
+        self.assertTrue(all(p['possibly_visible']for p in landmarks))
+
     def test_distorted_border_footprint_contains_valid_ground_rays(self):
         self.ranger.distortion=np.array([.15,-.2,.002,-.002,.08])
         view=CalibratedGroundView(self.ranger)
@@ -132,6 +162,18 @@ class GroundAssociationTests(unittest.TestCase):
                                                        self.model,self.view)
             self.assertIsNone(identities[0].corner_id)
             self.assertFalse(report['observations'])
+
+    def test_geometry_only_projection_cannot_be_used_as_localization_measurement(self):
+        reading=replace(measured(self.ranger,(540,-330)),geometry_only=True)
+        layers=lower_layers([reading])
+        self.assertTrue(reading.valid)
+        self.assertTrue(layers.corners[0].localization_eligible)
+        identities,report=associate_ground_corners([reading],layers,Pose2D(1500,2100,90),
+                                                  self.model,self.view)
+        self.assertIsNone(identities[0].corner_id)
+        self.assertFalse(report['observations'])
+        self.assertIsNone(report['vision_vehicle_position_mm'])
+        self.assertIsNone(report['compatible_vehicle_position_mm'])
 
     def test_large_radius_single_point_remains_ambiguous(self):
         reading=measured(self.ranger,(700,0))
@@ -195,18 +237,62 @@ class GroundAssociationTests(unittest.TestCase):
         identities[0].corner_id=None
         self.assertIsNone(apply_ground_identities([reading],identities)[0].corner_id)
 
-    def test_out_of_range_point_remains_drawable_but_not_in_layer_ranking(self):
+    def test_out_of_range_point_participates_in_ranking_but_not_localization(self):
         inside=measured(self.ranger,(540,-330))
-        outside=replace(inside,pixel=(1.,2.),valid=False,reason='beyond_distance_limit',
-                        x_mm=None,y_mm=None,z_mm=None,distance_mm=None)
-        layers=classify_bottom_edges([outside,inside],None)
+        geometric=replace(inside,pixel=(1.,2.),inferred=True,x_mm=1200.,y_mm=0.,
+                          distance_mm=1200.)
+        outside=replace(geometric,valid=False,reason='beyond_distance_limit',
+                        x_mm=None,y_mm=None,z_mm=None,distance_mm=None,bearing_deg=None)
+        layers=classify_bottom_edges([outside,inside],None,
+                                     ranking_readings=[geometric,inside])
         self.assertEqual(layers.candidate_count,2)
         self.assertEqual(layers.eligible_count,1)
+        self.assertEqual(layers.ranking_count,2)
         self.assertEqual(len(layers.corners),2)
         self.assertEqual(layers.status,'nearest_fallback')
-        only_outside=classify_bottom_edges([outside],None)
-        self.assertEqual(only_outside.status,'no_in_range_candidates')
-        self.assertIsNone(only_outside.lower_seed)
+        self.assertEqual(layers.lower_seed,tuple(map(int,np.rint(inside.pixel))))
+        self.assertFalse(layers.by_pixel[(1,2)].localization_eligible)
+        identities,report=associate_ground_corners([outside,inside],layers,
+            Pose2D(1500,2100,90),self.model,self.view)
+        self.assertIsNone(identities[0].corner_id)
+        self.assertEqual(identities[1].corner_id,'1.3')
+        self.assertEqual(len(report['observations']),1)
+
+        # A sole out-of-range point is still the geometric LOW* fallback,
+        # but neither a map identity nor a visual vehicle position is emitted.
+        only_outside=classify_bottom_edges([outside],None,ranking_readings=[geometric])
+        self.assertEqual(only_outside.status,'nearest_fallback')
+        self.assertEqual(only_outside.lower_seed,(1,2))
+        self.assertFalse(only_outside.corners[0].localization_eligible)
+        identities,report=associate_ground_corners([outside],only_outside,
+            Pose2D(1500,2100,90),self.model,self.view)
+        self.assertIsNone(identities[0].corner_id)
+        self.assertFalse(report['observations'])
+        self.assertIsNone(report['vision_vehicle_position_mm'])
+
+    def test_out_of_range_dimension_matched_lower_keeps_label_without_map_identity(self):
+        extended=camera()
+        extended.max_distance_mm=2500.
+        geometric=[measured(extended,(1600.,0.),True),
+                   measured(extended,(1300.,100.)),
+                   measured(extended,(540.,-330.)),
+                   measured(extended,(1200.,-330.),True)]
+        readings=[replace(r,valid=False,reason='beyond_distance_limit',
+                          x_mm=None,y_mm=None,z_mm=None,distance_mm=None,bearing_deg=None)
+                  if r.distance_mm>1000. else r for r in geometric]
+        from test_bottom_edge_classifier import graph
+        keys=[tuple(map(int,np.rint(r.pixel)))for r in geometric]
+        layers=classify_bottom_edges(readings,graph(keys[:2]),ranking_readings=geometric)
+        self.assertEqual(layers.by_pixel[keys[3]].layer,'lower')
+        self.assertEqual(layers.by_pixel[keys[3]].matched_edge,'length')
+        self.assertFalse(layers.by_pixel[keys[3]].localization_eligible)
+        labels_before={p:c.layer for p,c in layers.by_pixel.items()}
+        identities,report=associate_ground_corners(readings,layers,Pose2D(1500,2100,90),
+                                                 self.model,self.view)
+        self.assertEqual(identities[2].corner_id,'1.3')
+        self.assertIsNone(identities[3].corner_id)
+        self.assertEqual(len(report['observations']),1)
+        self.assertEqual({p:c.layer for p,c in layers.by_pixel.items()},labels_before)
 
     def test_invalid_parameters_are_rejected(self):
         for kwargs in ({'prior_radius_mm':-1},{'visible_tolerance_mm':math.nan},
@@ -230,8 +316,10 @@ class GroundPipelineTests(unittest.TestCase):
         args=build_parser().parse_args(['--pose-radius-mm','200'])
         command=vision_command(args,Path('stop'))
         self.assertEqual(command[command.index('--pose-radius-mm')+1],'200')
-        self.assertEqual(command[command.index('--range-max-mm')+1],'1000.0')
+        self.assertNotIn('--range-max-mm',command)
         self.assertIn('--ground-association',command)
+        bounded=vision_command(build_parser().parse_args(['--range-max-mm','1000']),Path('stop'))
+        self.assertEqual(float(bounded[bounded.index('--range-max-mm')+1]),1000.)
         command=vision_command(build_parser().parse_args(['--no-ground-association']),Path('stop'))
         self.assertIn('--no-ground-association',command)
 
@@ -255,6 +343,7 @@ class GroundPipelineTests(unittest.TestCase):
             before=pose.read_bytes()
             output=Path(directory)/'output/association/lingyan/latest.json'
             argv=['vision','--scene','front-facing','--ranging','--target-z-mm','0',
+                  '--range-max-mm','1000',
                   '--pose-file',str(pose),'--association-output',str(output),'--parameters']
             with patch('sys.argv',argv),patch.object(vision,'open_camera',return_value=Camera()), \
                  patch('corner_ranging.CornerRanger.from_camera',return_value=ranger), \

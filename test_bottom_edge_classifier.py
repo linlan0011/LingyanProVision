@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import math
 from pathlib import Path
@@ -36,6 +36,13 @@ def graph(*chains):
             supports.setdefault(tuple(point), []).append(SimpleNamespace(line_id=line_id))
     return SimpleNamespace(config=SimpleNamespace(point_geometry=None),
                            lines=lines, corner_supports=supports)
+
+
+def localization_readings(readings, limit=1000.):
+    """Reproduce the public ranging result that discards out-of-range XY."""
+    return [replace(r, valid=False, reason='beyond_distance_limit', x_mm=None,
+                    y_mm=None, z_mm=None, distance_mm=None, bearing_deg=None)
+            if r.distance_mm > limit else r for r in readings]
 
 
 class BottomEdgeTests(unittest.TestCase):
@@ -92,6 +99,103 @@ class BottomEdgeTests(unittest.TestCase):
         self.assertEqual(result.status, 'unmeasurable_or_wrong_plane')
         self.assertIsNone(result.upper_seed)
         self.assertEqual(result.by_pixel[(300, 200)].reason, 'near_horizon')
+
+    def test_farthest_compensation_remains_upper_seed_beyond_localization_range(self):
+        # Reproduce the three reported layouts. Excluding the far inferred
+        # corner made a side upper point the seed, then incorrectly propagated
+        # UP down that side to the closest actual bottom corner.
+        for upper_range, nearest_range in ((935., 578.), (928., 566.), (995., 621.)):
+            for mirror in (1, -1):
+                with self.subTest(upper_range=upper_range, mirror=mirror):
+                    far = (100 * mirror, 100)
+                    upper_left = (50 * mirror, 150)
+                    upper_right = (200 * mirror, 150)
+                    nearest = (200 * mirror, 300)
+                    other_bottom = (50 * mirror, 300)
+                    geometric = [reading(far, (1300., 0.), inferred=True),
+                                 reading(upper_left, (824., 0.)),
+                                 reading(upper_right, (upper_range, 0.)),
+                                 reading(nearest, (nearest_range, 0.)),
+                                 reading(other_bottom, (nearest_range, 660.))]
+                    supports = graph((far, upper_left), (far, upper_right),
+                                     (upper_right, nearest), (nearest, other_bottom))
+                    limited = localization_readings(geometric)
+                    before = [asdict(r) for r in limited]
+                    result = classify_bottom_edges(limited, supports,
+                                                   ranking_readings=geometric)
+                    self.assertEqual(result.status, 'classified')
+                    self.assertEqual(result.candidate_count, 5)
+                    self.assertEqual(result.ranking_count, 5)
+                    self.assertEqual(result.eligible_count, 4)
+                    self.assertEqual(result.upper_seed, far)
+                    self.assertEqual(result.lower_seed, nearest)
+                    self.assertEqual(result.upper_count, 3)
+                    self.assertEqual(result.by_pixel[other_bottom].layer, 'lower')
+                    self.assertEqual(result.by_pixel[other_bottom].matched_edge, 'length')
+                    self.assertFalse(result.by_pixel[far].localization_eligible)
+                    self.assertTrue(result.by_pixel[nearest].localization_eligible)
+                    self.assertTrue(result.by_pixel[far].inferred)
+                    self.assertEqual([asdict(r) for r in limited], before)
+                    self.assertEqual(len(result.corners), 5)
+                    json.dumps(result.payload(), allow_nan=False)
+
+    def test_localization_limit_does_not_change_geometric_classification(self):
+        geometric = self.basic() + [reading((300, 300), (300., 360.)),
+                                     reading((400, 300), (300., 660.))]
+        supports = graph((self.far, self.upper))
+        unrestricted = classify_bottom_edges(geometric, supports)
+        for limit in (100., 1000., 2000.):
+            with self.subTest(limit=limit):
+                result = classify_bottom_edges(localization_readings(geometric, limit),
+                                               supports, ranking_readings=geometric)
+                self.assertEqual(result.upper_seed, unrestricted.upper_seed)
+                self.assertEqual(result.lower_seed, unrestricted.lower_seed)
+                self.assertEqual({p: c.layer for p, c in result.by_pixel.items()},
+                                 {p: c.layer for p, c in unrestricted.by_pixel.items()})
+                self.assertEqual(result.ranking_count, len(geometric))
+                self.assertEqual(result.eligible_count,
+                                 sum(r.distance_mm <= limit for r in geometric))
+
+    def test_lost_out_of_range_geometry_cannot_promote_the_next_farthest(self):
+        limited = localization_readings(self.basic())
+        result = classify_bottom_edges(limited, graph((self.far, self.upper)))
+        self.assertEqual(result.status, 'ranking_incomplete')
+        self.assertIsNone(result.upper_seed)
+        self.assertIsNone(result.lower_seed)
+        self.assertTrue(all(c.layer == 'unknown' for c in result.corners))
+        self.assertEqual(result.eligible_count, 1)
+
+    def test_partial_ranking_input_does_not_hide_out_of_range_candidate(self):
+        geometric = self.basic()
+        result = classify_bottom_edges(localization_readings(geometric), None,
+                                       ranking_readings=geometric[1:])
+        self.assertEqual(result.status, 'ranking_incomplete')
+        self.assertIsNone(result.upper_seed)
+        self.assertIsNone(result.lower_seed)
+
+    def test_fallback_uses_all_geometry_even_when_nearest_is_not_localization_eligible(self):
+        geometric = [reading(self.far, (1500., 0.), inferred=True),
+                     reading(self.seed, (1200., 0.))]
+        for candidates in (geometric, geometric[:1]):
+            with self.subTest(count=len(candidates)):
+                result = classify_bottom_edges(localization_readings(candidates), None,
+                                               ranking_readings=candidates)
+                self.assertEqual(result.status, 'nearest_fallback')
+                self.assertEqual(result.ranking_count, len(candidates))
+                self.assertEqual(result.eligible_count, 0)
+                self.assertEqual(result.lower_seed,
+                                 self.seed if len(candidates) == 2 else self.far)
+                self.assertFalse(result.by_pixel[result.lower_seed].localization_eligible)
+                self.assertEqual(result.upper_count, 0)
+
+    def test_invalid_geometric_projection_still_prevents_partial_ranking(self):
+        geometric = self.basic()
+        geometric[0] = replace(geometric[0], valid=False, reason='near_horizon',
+                               x_mm=None, y_mm=None, z_mm=None, distance_mm=None)
+        result = classify_bottom_edges(self.basic(), None, ranking_readings=geometric)
+        self.assertEqual(result.status, 'unmeasurable_or_wrong_plane')
+        self.assertIsNone(result.upper_seed)
+        self.assertIsNone(result.lower_seed)
 
     def test_mixed_height_ranges_are_not_compared(self):
         points = self.basic()

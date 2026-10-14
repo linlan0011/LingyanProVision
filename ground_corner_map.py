@@ -1,6 +1,9 @@
 """Read-only map feedback for the bounded-pose lower-corner association."""
 from __future__ import annotations
 
+import math
+import time
+
 import numpy as np
 
 from ground_corner_association import _clip_polygon
@@ -33,8 +36,13 @@ def draw_ground_feedback(canvas, transform, data, prior):
     circle(prior.x_mm, prior.y_mm, radius, '#ffcc66', ('pose_uncertainty',))
     for observation in report['observations']:
         circle(*observation['map_center_mm'], observation['map_radius_mm'], '#559974')
+    ground_ids = {observation['corner_id'] for observation in report['observations']
+                  if observation.get('corner_id')}
+    root_ids = set(data.get('confirmed_corner_ids', ()))
+    confirmed_ids = ground_ids & root_ids
     names = {observation['corner_id']: observation for observation in report['observations']
-             if observation['corner_id']}
+             if observation.get('corner_id') in confirmed_ids and
+             report['status'] in ('unique', 'partial_unique')}
     for landmark in report['landmarks']:
         x,y = transform.world_to_canvas(*landmark['map_xy_mm'])
         observation = names.get(landmark['corner_id'])
@@ -46,21 +54,45 @@ def draw_ground_feedback(canvas, transform, data, prior):
         elif landmark['possibly_visible']:
             canvas.create_oval(x-6,y-6,x+6,y+6,outline='#b388ff',width=2,tags=tags)
     estimate = report['vision_vehicle_position_mm']
+    if report['status'] not in ('unique', 'partial_unique'):
+        position_reason = '本帧身份未确认'
+    elif not confirmed_ids:
+        position_reason = '本帧无确认编号'
+    elif ground_ids != root_ids:
+        position_reason = '本帧编号回传不一致'
+    elif estimate is None:
+        position_reason = '本帧无视觉反算结果'
+    elif (not isinstance(estimate, (list, tuple, np.ndarray)) or len(estimate) != 2 or
+          not all(isinstance(value, (float, int)) and math.isfinite(value) for value in estimate)):
+        position_reason = '本帧视觉反算坐标无效'
+    else:
+        position_reason = None
+    if position_reason is not None:
+        estimate = None
     if estimate is not None:
         x,y = transform.world_to_canvas(*estimate)
         canvas.create_line(x-7,y-7,x+7,y+7,fill='#00dddd',width=3,tags=tags)
         canvas.create_line(x-7,y+7,x+7,y-7,fill='#00dddd',width=3,tags=tags)
-        canvas.create_text(x+10,y-10,text='视觉反算位置',anchor='w',fill='#00dddd',tags=tags)
+        canvas.create_text(x+10,y-10,text='视觉反算候选',anchor='w',fill='#00dddd',tags=tags)
     status_names = {'unique':'身份唯一', 'partial_unique':'部分身份唯一', 'ambiguous':'身份多解',
                     'no_match':'未匹配', 'waiting_for_ground_corners':'等待有效下沿点',
                     'waiting_for_prior':'等待仿真位姿', 'map_unavailable':'地图不可用',
                     'calibration_unavailable':'标定不可用',
                     'search_limit_no_confirmation':'候选过多，暂不确认'}
     ids = sorted(names)
+    limit = report['max_distance_mm']
+    range_text = f'{limit:g} mm' if limit is not None else '不限距离'
     summary = ['下沿编号：'+('、'.join(ids) if ids else '?（未确认）'),
-               f"位置圆半径：{radius:g} mm；量程：{report['max_distance_mm']:g} mm"
-               if report['max_distance_mm'] is not None else '等待地面测距',
+               f'位置圆半径：{radius:g} mm；量程：{range_text}'
+               if report['status'] != 'calibration_unavailable' else '等待地面测距',
                status_names.get(report['status'],report['status'])]
+    frame = data.get('frame_number', '?')
+    try:
+        age = time.time() - float(data['created_at_unix'])
+        age_text = f'{max(0., age):.1f} s' if math.isfinite(age) else '未知'
+    except (KeyError, TypeError, ValueError):
+        age_text = '未知'
+    summary.append(f'回传帧：{frame}；反馈年龄：{age_text}（非拍摄时间）')
     safety_ids = report['possible_safety_ids']
     summary.append('候选安全区：'+('、'.join(map(str,safety_ids)) if safety_ids else '无'))
     for observation in report['observations'][:2]:
@@ -68,5 +100,7 @@ def draw_ground_feedback(canvas, transform, data, prior):
         kind = '补偿' if observation['inferred'] else '可见'
         summary.append(f"{name}（{kind}）：{observation['range_mm']:.1f} mm")
     if estimate is not None:
-        summary.append(f'视觉反算：({estimate[0]:.1f}, {estimate[1]:.1f}) mm')
+        summary.append(f'视觉反算候选：({estimate[0]:.1f}, {estimate[1]:.1f}) mm（未反写位姿）')
+    else:
+        summary.append('未输出位置：'+position_reason)
     return summary

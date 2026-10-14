@@ -37,6 +37,7 @@ class LayerCorner:
     distance_to_seed_mm: float | None = None
     matched_edge: str | None = None
     edge_error_mm: float | None = None
+    localization_eligible: bool = False
 
 
 @dataclass
@@ -50,6 +51,7 @@ class BottomEdgeResult:
     # Only adjacent accepted corners on the SAME validated fitted line.
     connections: list[tuple[tuple[int, int], tuple[int, int], int]] = field(default_factory=list)
     eligible_count: int = 0
+    ranking_count: int = 0
 
     @property
     def by_pixel(self):
@@ -110,30 +112,42 @@ def direct_corner_connections(pixels, boundary_result):
     return connections
 
 
-def classify_bottom_edges(readings, boundary_result, config=None):
-    """Keep every input candidate; only the layer-test working set is filtered."""
+def classify_bottom_edges(readings, boundary_result, config=None, *, ranking_readings=None):
+    """Rank the complete geometric candidate set, before map/range filtering.
+
+    A configured localization cap must never make the second-farthest point
+    replace the actual farthest. If its geometric range is unavailable, wait.
+    """
     config = config or BottomEdgeConfig()
     # A duplicate visible/inferred pixel is one candidate; prefer the visible.
     unique = {}
     for reading in sorted(readings, key=lambda r: r.inferred):
         unique.setdefault(_pixel(reading.pixel), reading)
+    metric = unique.copy()
+    ranking = {}
+    for reading in sorted(ranking_readings or (), key=lambda r: r.inferred):
+        ranking.setdefault(_pixel(reading.pixel), reading)
+    unique = {point: ranking.get(point, reading) for point, reading in unique.items()}
     result = BottomEdgeResult(config, 'no_candidates', len(unique))
     result.corners = [LayerCorner(point, r.inferred, r.distance_mm,
-                                 reason='not_classified')
+                                 reason='not_classified',
+                                 localization_eligible=metric[point].valid
+                                 and not getattr(metric[point], 'geometry_only', False))
                       for point, r in unique.items()]
     if not unique:
         return result
-    # A known out-of-range corner is deliberately excluded from this working
-    # set, but remains in the detector output. Unknown ranging failures still
-    # prevent ranking a potentially incomplete set.
+    result.eligible_count = sum(c.localization_eligible for c in result.corners)
+    result.ranking_count = sum(r.valid and r.distance_mm is not None
+                               and all(v is not None and math.isfinite(v)
+                                       for v in (r.x_mm, r.y_mm, r.distance_mm))
+                               and r.z_mm is not None
+                               and math.isclose(r.z_mm, config.ground_z_mm, abs_tol=1e-5)
+                               for r in unique.values())
     for corner in result.corners:
         if not unique[corner.pixel].valid:
             corner.reason = unique[corner.pixel].reason or 'unmeasurable'
-    unique = {point: r for point, r in unique.items()
-              if r.valid or r.reason != 'beyond_distance_limit'}
-    result.eligible_count = sum(r.valid for r in unique.values())
-    if not unique:
-        result.status = 'no_in_range_candidates'
+    if any(not r.valid and r.reason == 'beyond_distance_limit' for r in unique.values()):
+        result.status = 'ranking_incomplete'
         return result
     if any(not r.valid or r.distance_mm is None
            or not all(v is not None and math.isfinite(v)
