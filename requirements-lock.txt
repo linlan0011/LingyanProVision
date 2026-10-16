@@ -1,0 +1,7 @@
+# Verified on Windows 11 x64 / Python 3.12.14, 2026-10-16.
+# Snapshot of direct and transitive runtime dependencies; no package hashes.
+numpy==2.5.3
+opencv-python==5.0.0.93
+reportlab==4.5.1
+Pillow==12.3.0
+charset-normalizer==3.5.1

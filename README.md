@@ -1,6 +1,55 @@
 # Lingyan Pro Vision
 
-当前项目用于安全区轮廓识别、角点测距、地图角点身份判断，以及独立视觉绝对位姿解算。默认相机为 `usb0bda3035_1080p`，原图1920×1080。
+基于 USB 0BDA:3035 相机与 OpenCV 的惯性导航视觉校正方案（静态验证）。项目实现安全区轮廓识别、角点测距、地图角点身份判断，以及独立视觉绝对位姿解算。默认相机为 `usb0bda3035_1080p`，原图1920×1080。
+
+当前惯导先验由地图UI模拟输入 `(x, y, 航向角)`；尚未接入真实IMU或惯导通信，也未实现运动中的时间同步、状态融合和控制闭环。视觉解算输出独立的绝对位置及航向，用于后续惯导校正方案的静态验证。
+
+## 相机型号与采集参数
+
+| 项目 | 当前配置 |
+|---|---|
+| 系统设备名称 | USB Camera |
+| 硬件标识 | USB `VID_0BDA & PID_3035` |
+| 项目相机ID | `usb0bda3035_1080p` |
+| 厂商商业型号、传感器、镜头型号 | 现有资料未确认；硬件ID不能替代这些型号信息 |
+| 采集尺寸 | 1920×1080原图 |
+| 请求采集帧率 | 30 FPS；识别处理FPS以预览实测为准 |
+| Windows取流后端 | Media Foundation / OpenCV `CAP_MSMF` |
+| 压缩源模式 | 驱动记录为1080p MJPG 30 FPS；MSMF输出解码图像，配置不强设FOURCC |
+| 图像方向 | 不旋转、不镜像；预览缩放不改变标定原图坐标 |
+| 镜头模型 | OpenCV针孔模型 `opencv_pinhole`，5项畸变系数 |
+| 默认摄像头序号 | 0，可用 `--index` 覆盖；序号不代表硬件身份 |
+| 焦点、自动对焦、变焦 | 驱动未提供可用控制；保持镜头机械位置不变 |
+
+相机驱动控制初值如下，数值均按当前驱动单位解释：
+
+| 控制项 | 值/模式 | 控制项 | 值/模式 |
+|---|---|---|---|
+| 曝光 | 手动 −5 | 白平衡 | 自动，初始控制值6500，非锁定色温 |
+| 亮度 | 0 | 对比度 | 40 |
+| 色调 | 0 | 饱和度 | 66 |
+| 锐度 | 50 | 伽马 | 350 |
+| 背光补偿 | 0 | 增益 | 64 |
+
+程序通过Windows驱动接口核对设备并应用、回读这些控制设置。完整配置见[相机注册表](camera_profiles.json)及[USB相机说明](doc/USB_0BDA_3035_1080p标定配置.md)。已有 `lingyan`（640×480）、`seekfree`（采集768×1024，旋转后1024×768）和 `sp3220l_1080p`（1920×1080，请求25 FPS）配置分别管理，不能混用内外参；SP3220L的硬件ID是 `1871:0501`，与默认相机不同。
+
+## 库、依赖与验证环境
+
+当前验证环境为 **Windows 11 x64、Python 3.12.14**。下面的“已验证版本”来自2026-10-16本机已安装环境，并不表示其他版本已经验证：
+
+| 库/组件 | 安装约束 | 已验证版本 | 用途 |
+|---|---|---|---|
+| NumPy | `>=2.0,<3` | 2.5.3 | 数组、线性代数、直线拟合与位姿计算 |
+| OpenCV Python | `opencv-python>=4.10,<6` | 5.0.0.93 | 相机采集、HSV分割、轮廓、标定和图像界面 |
+| ReportLab | `>=4.4,<5` | 4.5.1 | 标定棋盘格PDF生成 |
+| Pillow | 由ReportLab依赖解析 | 12.3.0 | 图像及PDF工具依赖 |
+| charset-normalizer | 由ReportLab依赖解析 | 3.5.1 | ReportLab文本编码依赖 |
+| Tkinter / Tcl-Tk | Python安装组件 | 随当前Python环境 | 地图选点与参数UI |
+| Windows PowerShell / .NET | Windows系统组件 | 系统自带 | DirectShow设备身份和相机控制 |
+
+`argparse`、`json`、`pathlib`、`dataclasses`、`subprocess`、`ctypes`、`unittest`等均为Python标准库，不需要单独pip安装。当前算法不依赖PyTorch、CUDA、深度学习模型权重或ROS。
+
+[requirements.txt](requirements.txt)提供允许版本范围，[requirements-lock.txt](requirements-lock.txt)记录本次验证使用的5个第三方包版本。完整程序需要带GUI支持的 `opencv-python` 和可用Tkinter，不能直接使用 `opencv-python-headless` 替代。Windows驱动控制及启动脚本按Windows实现，其他平台尚未完成适配验证。
 
 ## 启动
 
@@ -10,6 +59,16 @@
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+需要按本次已验证包版本安装时，用下面命令替代上述依赖安装命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -c "import cv2, numpy, tkinter, reportlab; print('dependencies OK')"
+```
+
+安装Python时保留Tcl/Tk组件，并在Windows隐私设置中允许桌面应用访问摄像头。运行VS Code调试项还需要安装Microsoft Python与Python Debugger扩展。
 
 双击 `start_app.cmd`，或运行：
 
@@ -81,6 +140,10 @@ VS Code选择 **Run full app (pose UI + live camera)** 后按F5；Ctrl+Shift+B�
 ```
 
 安装外参绑定内参SHA256；换镜头、采集模式或相机安装姿态后，需要使用相应的重新标定结果。
+
+当前提交内参的数值摘要：`fx=961.2179 px`、`fy=959.5245 px`、`cx=951.4811 px`、`cy=543.8929 px`；畸变顺序为 `k1,k2,p1,p2,k3`，完整系数以[内参文件](calibration/results/usb0bda3035_1080p/intrinsics.json)为准。该次内参使用9×6内角点、实测格长19.2 mm，重投影RMS约0.7191 px；这是标定拟合指标，不是车体定位精度。
+
+当前拟合的相机车体系位置约为 `(17.085, −6.392, 174.277) mm`，旋转矩阵及内参哈希绑定见[安装外参文件](calibration/results/usb0bda3035_1080p/mount_pose.json)。这些参数只适用于记录中的相机模式及安装状态，另一台同硬件ID相机也需要独立标定。
 
 ## 规则与文档
 
