@@ -1,11 +1,6 @@
-"""Bounded-position association of measured lower corners to fixed map IDs.
-
-Heading is held fixed throughout the prior disk. Layer labels are supplied by
-the existing detector/classifier; this module does not prove physical height.
-"""
+"""Retained calibrated view prefilter over a bounded input-position disk."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import math
 
 import cv2
@@ -13,24 +8,7 @@ import numpy as np
 
 from calibration.lens_models import project_points, undistort_points
 from pose_io import normalize_heading_deg
-from safety_identity import ActiveTemplate, CornerIdentity, CornerObservation, map_corners
-
-
-@dataclass(frozen=True)
-class GroundAssociationConfig:
-    prior_radius_mm: float = 200.
-    visible_tolerance_mm: float = 30.
-    inferred_tolerance_mm: float = 50.
-    image_margin_px: float = 2.
-    max_search_nodes: int = 20000
-
-    def __post_init__(self):
-        values = (self.prior_radius_mm, self.visible_tolerance_mm,
-                  self.inferred_tolerance_mm, self.image_margin_px)
-        if any(not math.isfinite(v) or v < 0 for v in values):
-            raise ValueError('association radii and margins must be finite and nonnegative')
-        if self.max_search_nodes < 1:
-            raise ValueError('association search budget must be positive')
+from safety_identity import ActiveTemplate, map_corners
 
 
 def heading_rotation(degrees):
@@ -66,7 +44,7 @@ class CalibratedGroundView:
     """
     def __init__(self, ranger, image_margin_px=2.):
         if ranger.target_z_mm != 0:
-            raise ValueError('lower-corner association requires the ground plane Z=0')
+            raise ValueError('candidate safety view requires the ground plane Z=0')
         self.ranger = ranger
         self.image_margin_px = image_margin_px
         width, height = ranger.size
@@ -175,176 +153,38 @@ def circle_templates(prior, zones, model, safety_ids, radius):
         view = model['views'][zone.view_side]
         if abs(normalize_heading_deg(prior.heading_deg-view['heading_deg'])) > view['heading_tolerance_deg']:
             continue
-        templates.add(ActiveTemplate(zone.safety_zone_id, zone.view_side, view['scene'],
-                                    tuple(view.get('slots', ())), view.get('identity_enabled', True),
-                                    view.get('identity_mode', 'directed_edges'),
-                                    tuple(view.get('image_slots', ()))))
+        templates.add(ActiveTemplate(zone.safety_zone_id, zone.view_side, view['scene']))
     return sorted(templates, key=lambda t: (t.safety_id, t.side))
 
 
-def disk_intersection_witness(disks):
-    """Find a point in ALL closed disks, including tangent/zero-radius cases.
+def candidate_safety_view(prior, model, view, radius=200.):
+    """Keep a zone when any of its four corners can enter the disk-view union.
 
-    Pairwise overlap alone is insufficient for three or more disks. A nonempty
-    intersection contains a disk center or a boundary intersection of two disks.
+    This is the only retained use of the input-position uncertainty disk.
+    It does not associate a measured corner with a map corner.
     """
-    disks = [(np.asarray(center, float), float(radius)) for center, radius in disks]
-    candidates = [center for center, _ in disks]
-    for index, (first, r1) in enumerate(disks):
-        for second, r2 in disks[index+1:]:
-            vector = second-first
-            distance = float(np.linalg.norm(vector))
-            if distance < 1e-9 or distance > r1+r2+1e-7 or distance < abs(r1-r2)-1e-7:
-                continue
-            along = (r1*r1-r2*r2+distance*distance)/(2*distance)
-            height = math.sqrt(max(0., r1*r1-along*along))
-            unit = vector/distance
-            base = first+along*unit
-            normal = np.array([-unit[1], unit[0]])
-            candidates.extend((base+height*normal, base-height*normal))
-    for point in candidates:
-        if all(np.linalg.norm(point-center) <= radius+1e-6 for center, radius in disks):
-            return point
-    return None
-
-
-def associate_ground_corners(readings, layers, prior, model, view, config=None):
-    config = config or GroundAssociationConfig()
-    identities = [CornerIdentity(CornerObservation(tuple(r.pixel), r.inferred, ()),
-                                 reason='not_lower_layer') for r in readings]
-    report = dict(schema='safety.ground_circle_association.v1', config=asdict(config),
-                  status='waiting_for_ground_corners', heading_model='fixed_prior_heading',
-                  max_distance_mm=view.ranger.max_distance_mm if view else None,
-                  identity_condition='conditional_on_lower_layer_and_prior_bound',
-                  pose_corrected=False, possible_safety_ids=[], landmarks=[], observations=[],
-                  hypothesis_count=0, matched_count=0, search_nodes=0,
-                  vision_vehicle_position_mm=None, compatible_vehicle_position_mm=None,
-                  central_footprint_map_mm=[], possible_footprint_map_mm=[])
+    if not math.isfinite(radius) or radius < 0:
+        raise ValueError('position radius must be finite and nonnegative')
+    report = dict(schema='safety.candidate_view.v1', status='ready',
+                  prior_radius_mm=radius, max_distance_mm=view.ranger.max_distance_mm if view else None,
+                  possible_safety_ids=[], landmarks=[], central_footprint_map_mm=[],
+                  possible_footprint_map_mm=[], heading_model='fixed_input_heading')
     if view is None or not view.ranger.check_sources():
         report['status'] = 'calibration_unavailable'
-        return identities, report
-    if prior is None:
+    elif prior is None:
         report['status'] = 'waiting_for_prior'
-        return identities, report
-    if model is None:
+    elif model is None:
         report['status'] = 'map_unavailable'
-        return identities, report
-    center = np.array([prior.x_mm, prior.y_mm])
-    rotation = heading_rotation(prior.heading_deg)
-    landmarks = view.landmarks(prior, config.prior_radius_mm, model)
-    report['landmarks'] = landmarks
-    report['possible_safety_ids'] = sorted({p['safety_id'] for p in landmarks if p['possibly_visible']})
-    extent = view.map_extent(prior, config.prior_radius_mm, model)
-    report['footprint_computation_extent_mm'] = extent
-    report['range_limit_enabled'] = view.ranger.max_distance_mm is not None
-    footprint = view.footprint(prior, extent_mm=extent)
-    report['central_footprint_map_mm'] = footprint.tolist()
-    if len(footprint):
-        angles = np.arange(64)*2*math.pi/64
-        offsets = np.c_[np.cos(angles), np.sin(angles)] * config.prior_radius_mm/math.cos(math.pi/64)
-        union = cv2.convexHull((footprint[:, None, :]+offsets).reshape(-1, 2).astype(np.float32))
-        report['possible_footprint_map_mm'] = union.reshape(-1, 2).tolist()
-    if layers is None:
-        return identities, report
-    layer_map = layers.by_pixel
-    observations = []
-    for index, reading in enumerate(readings):
-        key = tuple(map(int, np.rint(reading.pixel)))
-        layer = layer_map.get(key)
-        if layer is None or layer.layer not in ('lower_seed', 'lower'):
-            continue
-        identity = identities[index]
-        identity.reason = 'invalid_ground_range'
-        if (not reading.valid or getattr(reading, 'geometry_only', False)
-                or not getattr(layer, 'localization_eligible', True)
-                or reading.distance_mm is None or reading.x_mm is None
-                or reading.y_mm is None or reading.z_mm is None
-                or not math.isclose(reading.z_mm, 0., abs_tol=1e-5)
-                or not view.contains_body([reading.x_mm, reading.y_mm])):
-            continue
-        relative = np.array([reading.x_mm, reading.y_mm])
-        expected_map = center+rotation@relative
-        tolerance = config.inferred_tolerance_mm if reading.inferred else config.visible_tolerance_mm
-        record = dict(pixel=list(key), inferred=reading.inferred, layer=layer.layer,
-                      body_xy_mm=relative.tolist(), range_mm=reading.distance_mm,
-                      map_center_mm=expected_map.tolist(), map_radius_mm=config.prior_radius_mm+tolerance,
-                      measurement_tolerance_mm=tolerance, candidates=[], corner_id=None,
-                      reason='no_compatible_map_corner', vehicle_hypotheses=[])
-        options = []
-        for landmark in landmarks:
-            if not landmark['possibly_visible']:
-                continue
-            vehicle = np.asarray(landmark['map_xy_mm'])-rotation@relative
-            if np.linalg.norm(vehicle-center) <= config.prior_radius_mm+tolerance+1e-6:
-                options.append((landmark['corner_id'], vehicle, tolerance))
-                record['vehicle_hypotheses'].append(dict(corner_id=landmark['corner_id'],
-                                                        xy_mm=vehicle.tolist()))
-        record['candidates'] = [option[0] for option in options]
-        identity.candidates = set(record['candidates'])
-        observations.append((index, record, options))
-    report['observations'] = [record for _, record, _ in observations]
-    if not observations:
-        return identities, report
-    best, solutions, witnesses, nodes, exceeded = -1, [], [], 0, False
-
-    def search(position, assigned, used, disks, safety_id):
-        nonlocal best, solutions, witnesses, nodes, exceeded
-        nodes += 1
-        if nodes > config.max_search_nodes:
-            exceeded = True
-            return
-        if exceeded or len(used)+len(observations)-position < best:
-            return
-        if position == len(observations):
-            count = len(used)
-            if count > best:
-                best, solutions, witnesses = count, [], []
-            if count == best:
-                solutions.append(tuple(assigned))
-                witnesses.append(disk_intersection_witness(disks))
-            return
-        for corner_id, vehicle, tolerance in observations[position][2]:
-            zone = corner_id.split('.')[0]
-            if corner_id in used or (safety_id is not None and safety_id != zone):
-                continue
-            proposed = disks+[(vehicle, tolerance)]
-            if disk_intersection_witness(proposed) is not None:
-                search(position+1, assigned+[corner_id], used|{corner_id}, proposed, zone)
-        search(position+1, assigned+[None], used, disks, safety_id)
-
-    search(0, [], set(), [(center, config.prior_radius_mm)], None)
-    report.update(hypothesis_count=len(solutions), matched_count=max(0, best), search_nodes=nodes)
-    if exceeded:
-        report['status'] = 'search_limit_no_confirmation'
-        for index, record, _ in observations:
-            record['reason'] = identities[index].reason = 'search_limit_no_confirmation'
-        return identities, report
-    confirmed_positions = []
-    for position, (index, record, options) in enumerate(observations):
-        alternatives = {solution[position] for solution in solutions}
-        identity = identities[index]
-        if len(alternatives) == 1 and None not in alternatives:
-            identity.corner_id = record['corner_id'] = next(iter(alternatives))
-            record['reason'] = identity.reason = 'unique_joint_circle_match'
-            confirmed_positions.append(next(vehicle for name, vehicle, _ in options
-                                            if name == identity.corner_id))
-        elif options:
-            record['reason'] = identity.reason = 'ambiguous_or_joint_conflict'
-        else:
-            identity.reason = record['reason']
-    if confirmed_positions:
-        report['vision_vehicle_position_mm'] = np.mean(confirmed_positions, axis=0).tolist()
-        report['compatible_vehicle_position_mm'] = witnesses[0].tolist()
-        report['status'] = 'unique' if len(solutions) == 1 else 'partial_unique'
     else:
-        report['status'] = 'ambiguous' if best > 0 else 'no_match'
-    return identities, report
-
-
-def apply_ground_identities(readings, identities):
-    """Replace legacy IDs, including clearing labels on upper/unmatched points."""
-    from dataclasses import replace
-    names = {tuple(r.observation.point): r.corner_id for r in identities}
-    return [replace(r, corner_id=names.get(tuple(r.pixel)),
-                    label=r.label.split('/')[0]+('/'+names[tuple(r.pixel)] if names.get(tuple(r.pixel)) else ''))
-            for r in readings]
+        report['landmarks'] = view.landmarks(prior, radius, model)
+        report['possible_safety_ids'] = sorted({point['safety_id'] for point in report['landmarks']
+                                               if point['possibly_visible']})
+        extent = view.map_extent(prior, radius, model)
+        footprint = view.footprint(prior, extent_mm=extent)
+        report['central_footprint_map_mm'] = footprint.tolist()
+        if len(footprint):
+            angles = np.arange(64)*2*math.pi/64
+            offsets = np.c_[np.cos(angles), np.sin(angles)] * radius/math.cos(math.pi/64)
+            union = cv2.convexHull((footprint[:, None, :]+offsets).reshape(-1, 2).astype(np.float32))
+            report['possible_footprint_map_mm'] = union.reshape(-1, 2).tolist()
+    return report

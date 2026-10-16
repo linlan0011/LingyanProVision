@@ -1,0 +1,257 @@
+{
+  "schema": "camera.intrinsics.v2",
+  "created_utc": "2026-09-30T14:29:45.202999+00:00",
+  "camera_id": "usb0bda3035_1080p",
+  "camera_name": "USB Camera VID_0BDA PID_3035 1080p",
+  "model": "opencv_pinhole",
+  "capture_width": 1920,
+  "capture_height": 1080,
+  "rotation": "none",
+  "pixel_format": null,
+  "target_fps": 30.0,
+  "backend": "msmf",
+  "device_vid_pid": "0BDA:3035",
+  "fixed_controls": {
+    "camera.exposure": -5,
+    "video.brightness": 0,
+    "video.contrast": 40,
+    "video.hue": 0,
+    "video.saturation": 66,
+    "video.sharpness": 50,
+    "video.gamma": 350,
+    "video.backlight": 0,
+    "video.gain": 64
+  },
+  "automatic_controls": {
+    "video.white_balance": 6500
+  },
+  "image_width": 1920,
+  "image_height": 1080,
+  "chessboard_inner_corners": [
+    9,
+    6
+  ],
+  "square_size_mm": 19.2,
+  "camera_matrix": [
+    [
+      961.2178541170634,
+      0.0,
+      951.481116120382
+    ],
+    [
+      0.0,
+      959.5244559927384,
+      543.8928831309088
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_order": [
+    "k1",
+    "k2",
+    "p1",
+    "p2",
+    "k3"
+  ],
+  "distortion_coefficients": [
+    0.1558679517771001,
+    -0.2070471653866815,
+    0.0015753354930891697,
+    -0.0018685444624419695,
+    0.08795396387532185
+  ],
+  "rms_reprojection_error_px": 0.7191140331593039,
+  "mean_view_rmse_px": 0.6462596596583076,
+  "max_view_rmse_px": 1.333313226699829,
+  "views": [
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220513_001.png",
+      "rmse_px": 0.7169041037559509
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220519_002.png",
+      "rmse_px": 0.8850632905960083
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220531_003.png",
+      "rmse_px": 1.043599009513855
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220539_004.png",
+      "rmse_px": 0.7267919778823853
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220544_005.png",
+      "rmse_px": 0.6948153376579285
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220552_006.png",
+      "rmse_px": 0.23492321372032166
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220606_007.png",
+      "rmse_px": 0.2122071385383606
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220609_008.png",
+      "rmse_px": 0.5002967715263367
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220614_009.png",
+      "rmse_px": 0.3726001977920532
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220617_010.png",
+      "rmse_px": 0.19497956335544586
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220622_011.png",
+      "rmse_px": 0.16173076629638672
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220628_012.png",
+      "rmse_px": 0.8736356496810913
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220630_013.png",
+      "rmse_px": 0.768557608127594
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220633_014.png",
+      "rmse_px": 1.1431326866149902
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220637_015.png",
+      "rmse_px": 0.8347485065460205
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220644_016.png",
+      "rmse_px": 1.1191359758377075
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220647_017.png",
+      "rmse_px": 0.6382890343666077
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220650_018.png",
+      "rmse_px": 0.729117214679718
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220654_019.png",
+      "rmse_px": 0.7791950106620789
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220702_020.png",
+      "rmse_px": 0.6059816479682922
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220707_021.png",
+      "rmse_px": 0.6367209553718567
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220709_022.png",
+      "rmse_px": 0.785335123538971
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220714_023.png",
+      "rmse_px": 0.8332277536392212
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220716_024.png",
+      "rmse_px": 0.4838119149208069
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220721_025.png",
+      "rmse_px": 0.4833785593509674
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220723_026.png",
+      "rmse_px": 0.910819411277771
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220726_027.png",
+      "rmse_px": 0.6607103943824768
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220728_028.png",
+      "rmse_px": 0.633572518825531
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220732_029.png",
+      "rmse_px": 1.2630316019058228
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220739_030.png",
+      "rmse_px": 0.6767807602882385
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220742_031.png",
+      "rmse_px": 0.47969111800193787
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220745_032.png",
+      "rmse_px": 0.4582057297229767
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220746_033.png",
+      "rmse_px": 0.3779449164867401
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220749_034.png",
+      "rmse_px": 0.2906283140182495
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220752_035.png",
+      "rmse_px": 0.23836934566497803
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220754_036.png",
+      "rmse_px": 0.2373303472995758
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220758_037.png",
+      "rmse_px": 0.33007320761680603
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220817_038.png",
+      "rmse_px": 0.3593011796474457
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220820_039.png",
+      "rmse_px": 0.20508860051631927
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220831_040.png",
+      "rmse_px": 0.6314972043037415
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220834_041.png",
+      "rmse_px": 0.5513118505477905
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220841_042.png",
+      "rmse_px": 1.16123366355896
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220845_043.png",
+      "rmse_px": 1.302681803703308
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220854_044.png",
+      "rmse_px": 1.333313226699829
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220857_045.png",
+      "rmse_px": 0.8483467698097229
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\usb0bda3035_1080p\\train\\chessboard_20260930_220900_046.png",
+      "rmse_px": 0.319833368062973
+    }
+  ],
+  "rejected_files": [],
+  "notes": "Valid only for this resolution, lens focus, zoom and camera settings."
+}

@@ -56,6 +56,40 @@ def summarize(rows):
     }
 
 
+def apply_analysis_range(result, *, x_min_mm=None, x_max_mm=None, y_min_mm=None,
+                         y_max_mm=None, r_min_mm=None, r_max_mm=None):
+    """Inclusive selection by surveyed coordinates, independent of runtime gates."""
+    bounds = dict(x_min_mm=x_min_mm,x_max_mm=x_max_mm,y_min_mm=y_min_mm,
+                  y_max_mm=y_max_mm,r_min_mm=r_min_mm,r_max_mm=r_max_mm)
+    for key,value in bounds.items():
+        if value is not None and not math.isfinite(value):
+            raise ValueError(f"{key}: 范围边界必须是有限数字，留空表示不限")
+    for axis in ("x","y","r"):
+        lo,hi = bounds[f"{axis}_min_mm"],bounds[f"{axis}_max_mm"]
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError(f"{axis.upper()} 下限不能大于上限")
+        if axis == "r" and any(v is not None and v < 0 for v in (lo,hi)):
+            raise ValueError("水平距离 r 的范围边界不能小于 0")
+    selected = []
+    for row in result["points"]:
+        x,y,_ = row["expected_body_mm"]
+        values = dict(x=x,y=y,r=row["reference_distance_mm"])
+        matches = all((bounds[f"{axis}_min_mm"] is None or value >= bounds[f"{axis}_min_mm"])
+                      and (bounds[f"{axis}_max_mm"] is None or value <= bounds[f"{axis}_max_mm"])
+                      for axis,value in values.items())
+        row["selected_by_range"] = matches
+        if matches:
+            selected.append(row)
+    result.update(report_version=4,
+                  analysis_range={"active": any(v is not None for v in bounds.values()),
+                                  "coordinate_source": "surveyed_body_coordinates",
+                                  "boundaries_inclusive": True,**bounds,
+                                  "point_ids": [r["point_id"] for r in selected]},
+                  range_summary=summarize(selected),
+                  range_runtime_summary=summarize([r for r in selected if r["runtime_usable"]]))
+    return result
+
+
 def analyse_records(records, intrinsics, mount, *, max_distance_mm=2000.,
                     min_plane_angle_deg=3., error_limit_mm=None, bin_mm=300.):
     if not math.isfinite(bin_mm) or bin_mm <= 0:
@@ -190,6 +224,47 @@ def render_report(result):
         lines.append(f'{r["point_id"]:<6} '+" ".join(f"{num(r[k]):>8}" for k in keys)+"  "+verdict)
         if not r["runtime_usable"]:
             lines.append(f'       原因：{r["reason"] or r["runtime_reason"]}')
+    selection = result.get("analysis_range")
+    if selection and selection["active"]:
+        conditions = []
+        for axis in ("x","y","r"):
+            label = axis.upper() if axis != "r" else "r"
+            lo,hi = selection[f"{axis}_min_mm"],selection[f"{axis}_max_mm"]
+            if lo is not None:
+                conditions.append(f"{label}≥{lo:g} mm")
+            if hi is not None:
+                conditions.append(f"{label}≤{hi:g} mm")
+        chosen = set(selection["point_ids"])
+        selected = [r for r in result["points"] if r["point_id"] in chosen]
+        q = result["range_summary"]
+        lines += ["","="*78,"可调范围统计（按实测坐标；边界包含；多条件同时满足）：",
+                  " 且 ".join(conditions),
+                  f'入选={q["count"]}/{s["count"]}，几何有效={q["valid_count"]}，无效={q["invalid_count"]}，'
+                  f'实时门限可用={q["runtime_usable_count"]}',
+                  f'范围内水平误差：mean={num(q["mean_horizontal_error_mm"])}，median={num(q["median_horizontal_error_mm"])}，'
+                  f'RMSE={num(q["rmse_horizontal_mm"])}，P95={num(q["p95_horizontal_error_mm"])}，max={num(q["max_horizontal_error_mm"])} mm',
+                  f'平均偏差：ΔX={num(q["mean_x_error_mm"])}，ΔY={num(q["mean_y_error_mm"])} mm；'
+                  f'分轴 RMSE：X={num(q["rmse_x_mm"])}，Y={num(q["rmse_y_mm"])} mm',
+                  f'距离误差：平均带符号={num(q["mean_distance_error_mm"])}，MAE={num(q["mae_distance_mm"])}，'
+                  f'RMSE={num(q["rmse_distance_mm"])}，max|Δr|={num(q["max_abs_distance_error_mm"])} mm',
+                  f'方位角误差：MAE={num(q["mae_bearing_deg"])}，max|Δa|={num(q["max_abs_bearing_error_deg"])} deg']
+        if limit is not None:
+            lines.append(f'范围内 eXY≤{limit:g} mm：通过={q["pass_count"]}，超限={q["fail_count"]}；无效点另计。')
+        lines += ["范围内逐点误差（保留全报告原点号）：",
+                  "ID       X真      Y真       ΔX       ΔY      eXY       Δr     Δa/deg  相对r/%"]
+        for r in selected:
+            keys = ("x_error_mm","y_error_mm","horizontal_error_mm","distance_error_mm",
+                    "bearing_error_deg","relative_distance_error_percent")
+            x,y,_ = r["expected_body_mm"]
+            lines.append(f'{r["point_id"]:<6} {x:8.2f} {y:8.2f} '+" ".join(f"{num(r[k]):>8}" for k in keys))
+            if not r["runtime_usable"]:
+                lines.append(f'       原因：{r["reason"] or r["runtime_reason"]}')
+        if not selected:
+            lines.append("本范围没有采集点；各误差显示 --，不是零误差。")
+        rt_range = result["range_runtime_summary"]
+        lines += [f'范围内仅实时可用点：n={rt_range["count"]}，mean_e={num(rt_range["mean_horizontal_error_mm"])}，'
+                  f'RMSE={num(rt_range["rmse_horizontal_mm"])}，P95={num(rt_range["p95_horizontal_error_mm"])}，'
+                  f'max_e={num(rt_range["max_horizontal_error_mm"])} mm',"="*78]
     for title,groups in (("按前向 X 分组",result["groups_by_x"]),("按实测水平距离 r 分组",result["distance_groups"])):
         lines += ["",title+"（误差基于几何有效点，长度 mm）：",
                   "组别          有效/总数  实时可用   偏X     偏Y    mean_e    RMSE     P95     max_e"]

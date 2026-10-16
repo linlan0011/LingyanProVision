@@ -1,0 +1,4 @@
+# Mount calibration binds the exact intrinsics file bytes by SHA256.
+# Keep calibration artifacts unchanged across Windows/Linux checkouts.
+/calibration/results/*/intrinsics.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/calibration/results/*/mount_pose.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

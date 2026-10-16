@@ -29,7 +29,11 @@ def build_parser():
                         help='known corner height in body coordinates; current ground corners default to 0 mm')
     parser.add_argument('--range-max-mm', type=float, default=DEFAULT_MAX_DISTANCE_MM)
     parser.add_argument('--pose-radius-mm', type=int, default=200)
-    parser.add_argument('--ground-association', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--visual-pose', '--ground-association', dest='ground_association',
+                        action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--identity-angle-tol-deg', type=int, default=15)
+    parser.add_argument('--orthogonal-angle-tol-deg', type=int, default=15)
+    parser.add_argument('--heading-consistency-deg', type=int, default=15)
     parser.add_argument('--range-inferred', action='store_true')
     parser.add_argument('--association-output', type=Path)
     parser.add_argument('--pose-file', type=Path, default=PROJECT/'selected_pose.json')
@@ -47,6 +51,10 @@ def vision_command(args, stop_file):
             '--stop-file', str(stop_file)]
     command.extend(('--pose-radius-mm', str(args.pose_radius_mm),
                     '--ground-association' if args.ground_association else '--no-ground-association'))
+    for flag, value in (('--identity-angle-tol-deg', args.identity_angle_tol_deg),
+                        ('--orthogonal-angle-tol-deg', args.orthogonal_angle_tol_deg),
+                        ('--heading-consistency-deg', args.heading_consistency_deg)):
+        command.extend((flag, str(value)))
     if args.index is not None:
         command.extend(('--index', str(args.index)))
     if args.ranging:
@@ -80,11 +88,23 @@ def stop_vision(process, stop_file):
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not 0 <= args.pose_radius_mm <= 3000:
+        parser.error('--pose-radius-mm must be between 0 and 3000')
+    if not all(0 <= angle < 45 for angle in (args.identity_angle_tol_deg,
+            args.orthogonal_angle_tol_deg, args.heading_consistency_deg)):
+        parser.error('visual angle tolerances must be between 0 and 44 degrees')
     association_output = None
     if args.ranging:
+        from corner_ranging import CornerRanger
         from pose_association import association_output_path
-        association_output = association_output_path(args.camera, args.association_output, args.pose_file)
+        try:
+            CornerRanger.from_camera(args.camera, target_z_mm=args.target_z_mm,
+                                     max_distance_mm=args.range_max_mm)
+            association_output = association_output_path(args.camera, args.association_output, args.pose_file)
+        except (OSError,ValueError,TypeError) as exc:
+            parser.error(f'所选相机无法启用测距：{exc}。请检查内外参；仅识别可使用 --no-ranging。')
     started_at = datetime.now().timestamp()
     ui_args = pose_parser().parse_args([
         '--output', str(args.pose_file.resolve()), '--zones', str(args.zones_file.resolve()),

@@ -235,7 +235,7 @@ class BoundaryGeometryTests(unittest.TestCase):
     def test_pale_blue_face_requires_neutral_core_and_recovers_hidden_corner(self):
         import purple_camera_segmentation as vision
         for mirrored in (False, True):
-            for scene in ('front-facing', 'general'):
+            for scene in ('start-facing', 'front-facing', 'general'):
                 frame = np.full((480, 640, 3), 235, np.uint8)
                 cv2.rectangle(frame, (100, 100), (500, 400), (140, 30, 140), -1)
                 blue = cv2.cvtColor(np.uint8([[[100, 75, 218]]]), cv2.COLOR_HSV2BGR)[0, 0]
@@ -289,7 +289,7 @@ class SafetyComponentSelectionTests(unittest.TestCase):
         purple = self.frame()
         for frame in (purple, cv2.flip(purple, 1),
                       cv2.rotate(purple, cv2.ROTATE_90_CLOCKWISE)):
-            for scene in ('front-facing', 'general'):
+            for scene in ('start-facing', 'front-facing', 'general'):
                 detections, ranks = self.select(frame, scene)
                 self.assertLess(detections[1][0], .25 * detections[0][0])
                 self.assertEqual(ranks, {1, 2}, scene)
@@ -315,8 +315,8 @@ class SafetyComponentSelectionTests(unittest.TestCase):
         self.assertEqual(self.select(purple, minimum_area=400)[1], {1, 2})
         self.assertEqual(self.select(purple, minimum_area=8000)[1], {1})
 
-    def test_side_mode_keeps_its_existing_single_component_rule(self):
-        self.assertEqual(self.select(self.frame(), 'start-facing')[1], {1})
+    def test_side_mode_accepts_nearby_split_components(self):
+        self.assertEqual(self.select(self.frame(), 'start-facing')[1], {1, 2})
 
     def test_selected_fragment_without_white_support_produces_no_corner(self):
         import purple_camera_segmentation as vision

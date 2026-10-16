@@ -518,7 +518,7 @@ class Collector:
             messagebox.showerror("无法验证", "请先添加一个或多个实测点。", parent=self.root)
             return
         try:
-            from calibration.ranging_report import build_camera_report, render_report, save_reports
+            from calibration.ranging_report import apply_analysis_range, build_camera_report, render_report, save_reports
             from camera_profiles import results_dir
             current_path, _ = load_intrinsics(self.camera)
             if file_sha256(current_path) != self.intrinsics_hash:
@@ -533,6 +533,21 @@ class Collector:
         window = tk.Toplevel(self.root)
         window.title(f"{self.camera} — 全部采集点的几何误差")
         window.geometry("1180x760")
+        range_controls = ttk.Frame(window,padding=6)
+        range_controls.pack(fill="x")
+        ttk.Label(range_controls,text="统计范围（实测值，单位 mm；留空不限，包含边界）").grid(
+            row=0,column=0,columnspan=7,sticky="w")
+        variables = {}
+        for i,axis in enumerate(("x","y","r"),1):
+            label = axis.upper() if axis != "r" else "水平距离 r"
+            ttk.Label(range_controls,text=label).grid(row=i,column=0,sticky="w")
+            for j,bound in enumerate(("min","max")):
+                key = f"{axis}_{bound}_mm"
+                variables[key] = tk.StringVar(value="")
+                ttk.Label(range_controls,text="下限" if bound=="min" else "上限").grid(row=i,column=1+j*2,padx=4)
+                ttk.Entry(range_controls,textvariable=variables[key],width=12).grid(row=i,column=2+j*2)
+        # Bindings are kept on the window for regression checks and snapshot saving.
+        window.analysis_range_vars = variables
         box = scrolledtext.ScrolledText(window, wrap="none", font=("Consolas",10))
         box.pack(fill="both", expand=True)
         box.insert("1.0", render_report(report))
@@ -540,7 +555,33 @@ class Collector:
         xscroll = ttk.Scrollbar(window, orient="horizontal", command=box.xview)
         xscroll.pack(fill="x")
         box.configure(xscrollcommand=xscroll.set)
+        def update_range():
+            try:
+                bounds = {key:float(variable.get().strip()) if variable.get().strip() else None
+                          for key,variable in variables.items()}
+                apply_analysis_range(report,**bounds)
+            except (ValueError,TypeError) as exc:
+                messagebox.showerror("统计范围无效",str(exc),parent=window)
+                return False
+            box.configure(state="normal")
+            box.delete("1.0","end")
+            box.insert("1.0",render_report(report))
+            if report["analysis_range"]["active"]:
+                match = box.search("可调范围统计","1.0")
+                if match:
+                    box.see(match)
+            box.configure(state="disabled")
+            return True
+        window.refresh_analysis_range = update_range
+        ttk.Button(range_controls,text="更新范围统计",command=update_range).grid(row=1,column=5,rowspan=2,padx=12)
+        def clear_range():
+            for variable in variables.values():
+                variable.set("")
+            update_range()
+        ttk.Button(range_controls,text="清除范围",command=clear_range).grid(row=3,column=5,padx=12)
         def save():
+            if not update_range():
+                return
             name = filedialog.asksaveasfilename(parent=window, title="保存 JSON 和纯文本误差报告",
                 initialdir=results_dir(self.camera), initialfile=f"geometry_{self.session.name}.json",
                 defaultextension=".json", filetypes=[("JSON report","*.json")])

@@ -1,9 +1,0 @@
-{
-  "schema": "lingyan.pose.v1",
-  "coordinate_frame": "field_bottom_left_mm",
-  "x_mm": 1538.214,
-  "y_mm": 1120.916,
-  "heading_deg": -96.883,
-  "heading_convention": "0deg=+X, 90deg=+Y, counterclockwise_positive",
-  "updated_at": "2026-09-28T14:05:21.203688+00:00"
-}

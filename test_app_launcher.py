@@ -3,6 +3,8 @@ import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+import io
 from unittest.mock import patch
 
 import run_app
@@ -10,6 +12,15 @@ from pose_io import Pose2D, write_pose_atomic
 
 
 class LauncherTests(unittest.TestCase):
+    def test_invalid_calibration_fails_before_opening_camera_or_ui(self):
+        with patch("corner_ranging.CornerRanger.from_camera",side_effect=ValueError("mismatched intrinsics")), \
+                patch.object(run_app.tk,"Tk") as root, redirect_stderr(io.StringIO()) as error:
+            with self.assertRaises(SystemExit) as exited:
+                run_app.main(["--camera","lingyan"])
+            self.assertEqual(exited.exception.code,2)
+            self.assertIn("--no-ranging",error.getvalue())
+            root.assert_not_called()
+
     def test_default_command_shares_absolute_files_and_auto_scene(self):
         args = run_app.build_parser().parse_args([])
         command = run_app.vision_command(args, Path('C:/session/stop'))
@@ -25,7 +36,7 @@ from pathlib import Path
 import json, sys, time
 from pose_io import PoseFileReader
 from field_zones import read_zones
-from safety_identity import load_templates, active_templates, associate_corners, CornerObservation
+from safety_identity import load_templates, active_templates
 pose_path, seen_path, stop_path = map(Path,sys.argv[1:])
 reader=PoseFileReader(pose_path)
 model=load_templates()
@@ -35,9 +46,9 @@ while not stop_path.exists():
     pose=reader.poll()
     if pose is not None and pose != previous:
         templates,_=active_templates(pose,zones,model)
-        result=associate_corners([CornerObservation((430,365),False,(180,135))],templates,model)[0]
+        safety_ids=sorted({t.safety_id for t in templates})
         with seen_path.open('a',encoding='utf-8') as f:
-            f.write(json.dumps({'x':pose.x_mm,'corner':result.corner_id})+'\\n')
+            f.write(json.dumps({'x':pose.x_mm,'safety_ids':safety_ids})+'\\n')
         previous=pose
     time.sleep(.02)
 '''
@@ -70,8 +81,8 @@ while not stop_path.exists():
                  patch.object(run_app.subprocess,'Popen',side_effect=capture_process):
                 self.assertEqual(run_app.main(['--pose-file',str(pose)]),0)
             rows=[json.loads(line) for line in seen.read_text(encoding='utf-8').splitlines()]
-            self.assertIn({'x':1500.0,'corner':'1.3'},rows)
-            self.assertIn({'x':2200.0,'corner':'2.2'},rows)
+            self.assertIn({'x':1500.0,'safety_ids':[1]},rows)
+            self.assertIn({'x':2200.0,'safety_ids':[2]},rows)
             self.assertEqual(proc_holder[0].poll(),0)
 
     def test_ranging_feedback_round_trip_does_not_correct_ui_pose(self):

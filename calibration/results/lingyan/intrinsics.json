@@ -1,0 +1,229 @@
+{
+  "schema": "camera.intrinsics.v2",
+  "created_utc": "2026-09-30T14:25:03.851128+00:00",
+  "camera_id": "lingyan",
+  "camera_name": "原灵眼 Pro",
+  "model": "opencv_pinhole",
+  "capture_width": 640,
+  "capture_height": 480,
+  "rotation": "none",
+  "pixel_format": null,
+  "target_fps": null,
+  "backend": "auto",
+  "device_vid_pid": null,
+  "fixed_controls": null,
+  "automatic_controls": null,
+  "image_width": 640,
+  "image_height": 480,
+  "chessboard_inner_corners": [
+    9,
+    6
+  ],
+  "square_size_mm": 19.12,
+  "camera_matrix": [
+    [
+      413.67425271426293,
+      0.0,
+      348.8940191862818
+    ],
+    [
+      0.0,
+      414.8196680624767,
+      252.61723940664913
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_order": [
+    "k1",
+    "k2",
+    "p1",
+    "p2",
+    "k3"
+  ],
+  "distortion_coefficients": [
+    0.2133228987853326,
+    -0.24068858764524503,
+    0.0011302359000985643,
+    0.008167783193000475,
+    0.04661065276710361
+  ],
+  "rms_reprojection_error_px": 0.5343467590453719,
+  "mean_view_rmse_px": 0.49063568881579805,
+  "max_view_rmse_px": 0.9378246068954468,
+  "views": [
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_194727_001.png",
+      "rmse_px": 0.20244988799095154
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_194730_002.png",
+      "rmse_px": 0.20526696741580963
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_194748_003.png",
+      "rmse_px": 0.2774040699005127
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_194805_004.png",
+      "rmse_px": 0.11958548426628113
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_194820_005.png",
+      "rmse_px": 0.12030428647994995
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195009_006.png",
+      "rmse_px": 0.4294908344745636
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195023_007.png",
+      "rmse_px": 0.3105202317237854
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195027_008.png",
+      "rmse_px": 0.2962322235107422
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195036_009.png",
+      "rmse_px": 0.7804184556007385
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195042_010.png",
+      "rmse_px": 0.7451697587966919
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195051_011.png",
+      "rmse_px": 0.42490628361701965
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195057_012.png",
+      "rmse_px": 0.6190510392189026
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195118_013.png",
+      "rmse_px": 0.29323288798332214
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195125_014.png",
+      "rmse_px": 0.3816651403903961
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195131_015.png",
+      "rmse_px": 0.579604983329773
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195135_016.png",
+      "rmse_px": 0.9378246068954468
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195141_017.png",
+      "rmse_px": 0.47132137417793274
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195147_018.png",
+      "rmse_px": 0.6702060103416443
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195209_019.png",
+      "rmse_px": 0.654879629611969
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195210_020.png",
+      "rmse_px": 0.6441187858581543
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195213_021.png",
+      "rmse_px": 0.6649116277694702
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195214_022.png",
+      "rmse_px": 0.6926006078720093
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195218_023.png",
+      "rmse_px": 0.6498222947120667
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195219_024.png",
+      "rmse_px": 0.649480402469635
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195229_025.png",
+      "rmse_px": 0.46747642755508423
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195229_026.png",
+      "rmse_px": 0.4643128216266632
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195233_027.png",
+      "rmse_px": 0.29989510774612427
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195236_028.png",
+      "rmse_px": 0.5728700160980225
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195238_029.png",
+      "rmse_px": 0.4040411412715912
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195241_030.png",
+      "rmse_px": 0.47755366563796997
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195244_031.png",
+      "rmse_px": 0.46283233165740967
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195253_032.png",
+      "rmse_px": 0.7216545343399048
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195255_033.png",
+      "rmse_px": 0.8885619640350342
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195258_034.png",
+      "rmse_px": 0.5893759727478027
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195302_035.png",
+      "rmse_px": 0.6858355402946472
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195304_036.png",
+      "rmse_px": 0.8513389229774475
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195325_037.png",
+      "rmse_px": 0.2241685837507248
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195330_038.png",
+      "rmse_px": 0.25516048073768616
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195335_039.png",
+      "rmse_px": 0.5378971695899963
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195338_040.png",
+      "rmse_px": 0.3253229558467865
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195342_041.png",
+      "rmse_px": 0.30770358443260193
+    },
+    {
+      "file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\data\\lingyan\\train\\chessboard_20260929_195345_042.png",
+      "rmse_px": 0.2502298355102539
+    }
+  ],
+  "rejected_files": [],
+  "notes": "Valid only for this resolution, lens focus, zoom and camera settings."
+}

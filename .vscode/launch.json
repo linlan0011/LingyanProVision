@@ -2,37 +2,22 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Simulated pose + calibrated ranging (USB 1080p)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/run_app.py",
-            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
-            "args": ["--camera", "usb0bda3035_1080p", "--ranging", "--target-z-mm", "0"],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": true,
-            "subProcess": true
-        },
-        {
             "name": "Run full app (pose UI + live camera)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/run_app.py",
             "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "args": [
+                "--camera",
+                "usb0bda3035_1080p",
+                "--ranging",
+                "--target-z-mm",
+                "0"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "justMyCode": true,
             "subProcess": true
-        },
-        {
-            "name": "Calibration: collect mount points (LINGYAN)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "calibration.collect_mount_points",
-            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": true
         },
         {
             "name": "Field map pose selector",
@@ -44,85 +29,71 @@
             "justMyCode": true
         },
         {
-            "name": "Safety identity (LINGYAN auto pose templates)",
+            "name": "USB 1080p: front-facing",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/purple_camera_segmentation.py",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
             "args": [
                 "--camera",
-                "lingyan",
-                "--index",
-                "0",
+                "usb0bda3035_1080p",
                 "--scene",
-                "auto"
+                "front-facing",
+                "--ranging",
+                "--target-z-mm",
+                "0"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "justMyCode": true
         },
         {
-            "name": "Purple camera segmentation (LINGYAN legacy front)",
+            "name": "USB 1080p: start-facing",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/purple_camera_segmentation.py",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
             "args": [
                 "--camera",
-                "lingyan",
-                "--index",
-                "0",
+                "usb0bda3035_1080p",
                 "--scene",
-                "front-facing"
+                "start-facing",
+                "--ranging",
+                "--target-z-mm",
+                "0"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "justMyCode": true
         },
         {
-            "name": "Purple camera segmentation (LINGYAN legacy side)",
+            "name": "USB 1080p: general",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/purple_camera_segmentation.py",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
             "args": [
                 "--camera",
-                "lingyan",
-                "--index",
-                "0",
+                "usb0bda3035_1080p",
                 "--scene",
-                "start-facing"
+                "general",
+                "--ranging",
+                "--target-z-mm",
+                "0"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "justMyCode": true
         },
         {
-            "name": "Purple camera segmentation (SeekFree front)",
+            "name": "Calibration: collect mount points (USB 1080p)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/purple_camera_segmentation.py",
+            "module": "calibration.collect_mount_points",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
             "args": [
                 "--camera",
-                "seekfree",
-                "--index",
-                "0",
-                "--scene",
-                "front-facing"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": true
-        },
-        {
-            "name": "Purple camera segmentation (SeekFree side)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/purple_camera_segmentation.py",
-            "args": [
-                "--camera",
-                "seekfree",
-                "--index",
-                "0",
-                "--scene",
-                "start-facing"
+                "usb0bda3035_1080p"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

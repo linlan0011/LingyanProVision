@@ -23,12 +23,24 @@
 *.log.*
 *.LOG
 
-# Generated feedback, replay results and temporary diagnostics.
-/output/association/
-/output/deferred_pose_correction/
+# Local environments and runtime state.
+/.venv/
+/selected_pose.json
+
+# Generated feedback, reports, replay results and temporary diagnostics.
+/output/
 /outputs/
 /tmp/
 
-# Generated Python caches (existing tracked files are left unchanged).
+# Camera captures, exports and calibration history stay local.
+/calibration/data/
+/calibration/archives/
+/calibration/backups/
+/calibration/benchmarks/
+/calibration/results/*/*
+!/calibration/results/*/intrinsics.json
+!/calibration/results/*/mount_pose.json
+
+# Generated Python caches.
 __pycache__/
 *.py[cod]

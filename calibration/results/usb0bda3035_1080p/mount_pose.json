@@ -1,0 +1,49 @@
+{
+  "schema": "camera.mount.v2",
+  "camera_id": "usb0bda3035_1080p",
+  "model": "opencv_pinhole",
+  "convention": {
+    "body_axes": "X forward, Y left, Z up",
+    "camera_axes": "X image-right, Y image-down, Z optical-forward",
+    "rotation": "d_body = R_bc * d_camera",
+    "units": "millimetres"
+  },
+  "intrinsics_file": "C:\\Users\\24435\\Desktop\\LingyanProVision\\calibration\\results\\usb0bda3035_1080p\\intrinsics.json",
+  "intrinsics_sha256": "69f43cdef87a6cf644c1ab1a1c6847fa8c9af145b4baec57c95f80952878c498",
+  "rotation_camera_to_body": [
+    [
+      0.01112444195348028,
+      -0.3056063587050114,
+      0.9520929578094188
+    ],
+    [
+      -0.9999301795034526,
+      -0.007194764307102641,
+      0.00937397913153265
+    ],
+    [
+      0.003985336800926664,
+      -0.952130762493067,
+      -0.30566505885520173
+    ]
+  ],
+  "camera_position_body_mm": [
+    17.08514661042746,
+    -6.3918415394620025,
+    174.2765227840296
+  ],
+  "point_count": 12,
+  "inlier_indices_zero_based": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    10,
+    11
+  ],
+  "inlier_rmse_px": 1.3592236031600562,
+  "all_point_max_error_px": 6.908734690727712
+}

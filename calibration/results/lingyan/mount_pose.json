@@ -1,0 +1,43 @@
+{
+  "schema": "lingyan.camera_mount.v1",
+  "convention": {
+    "body_axes": "X forward, Y left, Z up",
+    "camera_axes": "X image-right, Y image-down, Z optical-forward",
+    "rotation": "d_body = R_bc * d_camera",
+    "units": "millimetres"
+  },
+  "intrinsics_file": "calibration\\results\\lingyan\\intrinsics.json",
+  "rotation_camera_to_body": [
+    [
+      -0.6111099994855739,
+      -0.32494593153404916,
+      -0.7217719238846929
+    ],
+    [
+      0.7083665459435152,
+      -0.6314108785981081,
+      -0.315495069654058
+    ],
+    [
+      -0.35321580530434304,
+      -0.7040812765351983,
+      0.6160423288344478
+    ]
+  ],
+  "camera_position_body_mm": [
+    -642535628.2507242,
+    40770119544.098015,
+    -103007971213.9545
+  ],
+  "point_count": 6,
+  "inlier_indices_zero_based": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "inlier_rmse_px": 0.05340628162711054,
+  "all_point_max_error_px": 0.05340880749181151
+}

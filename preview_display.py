@@ -33,9 +33,9 @@ class ParameterPanel:
     name = 'HSV / Geometry Parameters - P to hide'
     maxima = {'H low':179, 'H high':179, 'S min':255, 'V min':255,
               'min area':5000, 'corner min area':10000, 'corner min side':200,
-              'white S max':255, 'white V min':255, 'near band %':30,
-              'bottom tol mm':200, 'pose radius mm':3000,
-              'map tol mm':200, 'infer tol mm':200}
+              'white S max':255, 'white V min':255,
+              'pose radius mm':3000, 'identity tol deg':44,
+              'orthogonal tol deg':44, 'heading tol deg':44}
 
     def __init__(self, values, visible=False):
         self.values = dict(values)
@@ -86,10 +86,13 @@ def _text(image, text, xy, colour=(230,230,230), scale=.65, thickness=2):
                 colour, thickness, cv2.LINE_AA)
 
 
-def _corner_labels(image, recognitions, identities, readings, pixel_scale, bottom_edge_result=None):
+def _corner_labels(image, recognitions, identities, readings, pixel_scale, visual_pose=None,
+                   geometry_readings=()):
     identity = {tuple(map(int, r.observation.point)):r.corner_id for r in identities}
     ranges = {tuple(map(int, r.pixel)):r for r in readings}
-    layers = bottom_edge_result.by_pixel if bottom_edge_result is not None else {}
+    geometry = {tuple(map(int, np.rint(r.pixel))):r for r in geometry_readings}
+    selected = visual_pose.get('selected_corner') if visual_pose else None
+    selected_pixel = tuple(selected['pixel']) if selected is not None else None
     occupied = []
     for _, visible, hidden in recognitions:
         for inferred, values in ((False,visible),(True,hidden)):
@@ -99,24 +102,17 @@ def _corner_labels(image, recognitions, identities, readings, pixel_scale, botto
                 colour = (255,0,255) if inferred else (0,255,255)
                 cv2.circle(image, tuple(centre), 5, colour, -1, cv2.LINE_AA)
                 label = f"{identity.get(key) or '?'} {'EST' if inferred else 'V'} a={angle:.0f}"
-                layer = layers.get(key)
-                if layer is not None and layer.layer != 'unknown':
-                    tag, ring_colour = {
-                        'upper': ('UP', (0,165,255)),
-                        'lower': ('LOW', (80,255,80)),
-                        'lower_seed': ('LOW*', (255,255,0)),
-                    }[layer.layer]
-                    cv2.circle(image, tuple(centre), 10, ring_colour, 2, cv2.LINE_AA)
-                    label = tag + ' ' + label
+                if key == selected_pixel:
+                    cv2.circle(image, tuple(centre), 10, (255,255,0), 2, cv2.LINE_AA)
+                    label = 'NEAREST ' + label
                 reading = ranges.get(key)
                 lines = [label]
                 if reading is not None and reading.valid:
                     lines.append(f"r={reading.distance_mm:.0f}mm")
                 elif reading is not None and reading.reason == 'beyond_distance_limit':
-                    lines.append(f'geom r={layer.range_mm:.0f}mm | rank only'
-                                 if layer is not None and layer.range_mm is not None else 'OUT OF RANGE')
-                if layer is not None and layer.distance_to_seed_mm is not None:
-                    lines.append(f"to LOW*={layer.distance_to_seed_mm:.0f}mm e={layer.edge_error_mm:.0f}")
+                    ranked = geometry.get(key)
+                    lines.append(f'geom r={ranked.distance_mm:.0f}mm | range gate'
+                                 if ranked is not None and ranked.valid else 'OUT OF RANGE')
                 text_width = max(cv2.getTextSize(t,cv2.FONT_HERSHEY_SIMPLEX,.70,2)[0][0] for t in lines)
                 box_height = 26*len(lines)+6
                 choices = []
@@ -136,7 +132,7 @@ def _corner_labels(image, recognitions, identities, readings, pixel_scale, botto
 
 def compose_preview(overlay, mask_image, recognitions, identities, readings, *,
                     size, title, parameters, pose_text, status, boundary_result=None,
-                    ranger=None, bottom_edge_result=None, ground_association=None):
+                    ranger=None, visual_pose=None, geometry_readings=()):
     total_width, _ = size
     colour_width = round(total_width*2/3)
     mask_width = total_width-colour_width
@@ -146,8 +142,8 @@ def compose_preview(overlay, mask_image, recognitions, identities, readings, *,
     canvas = np.full((HEADER_HEIGHT+colour_height,total_width,3),24,np.uint8)
     colour = cv2.resize(overlay,(colour_width,colour_height),interpolation=cv2.INTER_AREA)
     binary = cv2.resize(mask_image,(mask_width,mask_height),interpolation=cv2.INTER_AREA)
-    _corner_labels(colour,recognitions,identities,readings,colour_width/width,bottom_edge_result)
-    _corner_labels(binary,recognitions,identities,[],mask_width/width,bottom_edge_result)
+    _corner_labels(colour,recognitions,identities,readings,colour_width/width,visual_pose,geometry_readings)
+    _corner_labels(binary,recognitions,identities,[],mask_width/width,visual_pose)
     if boundary_result is not None:
         for line in boundary_result.lines:
             if line.observed_length < boundary_result.config.minimum_edge:
@@ -177,24 +173,23 @@ def compose_preview(overlay, mask_image, recognitions, identities, readings, *,
     ids = sorted({r.corner_id for r in identities if r.corner_id})
     row('IDs: '+(', '.join(ids) or 'pending')
         +(f' | Z={ranger.target_z_mm:g}' if ranger is not None else ''),(100,255,120),.65,28)
-    if bottom_edge_result is not None:
-        test = bottom_edge_result
-        row(f'LAYER: N={test.ranking_count}/{test.candidate_count} UP={test.upper_count} LOW={test.lower_count}',
-            (100,255,255),.54,23)
-        row(f'L={test.config.length_mm:g} W={test.config.width_mm:g} tol=+/-{test.config.tolerance_mm:g}mm',
-            scale=.51,advance=21)
-        row('UP orange / LOW green / LOW* cyan seed',scale=.48,advance=21)
-        row(test.status+' | hypotheses',scale=.47,advance=21)
-    if ground_association is not None:
-        association = ground_association
-        radius = association['config']['prior_radius_mm']
-        limit = association['max_distance_mm']
+    if visual_pose is not None:
+        view = visual_pose['candidate_view'] or {}
+        radius = view.get('prior_radius_mm', 200.)
+        limit = view.get('max_distance_mm')
         range_text = (f'range<={limit:g}mm' if limit is not None else 'range unlimited')
-        if association['status'] == 'calibration_unavailable':
+        if visual_pose['status'] == 'calibration_unavailable':
             range_text = 'ranging required'
-        row(f'MAP: R={radius:g}mm {range_text}',
+        row(f'ZONE VIEW: R={radius:g}mm {range_text}',
             (100,255,120),.51,21)
-        row(association['status']+f" | {association['hypothesis_count']} hypotheses",scale=.49,advance=21)
+        row('Zones: '+(', '.join(map(str,view.get('possible_safety_ids',()))) or 'none'),scale=.50,advance=21)
+        row(visual_pose['status'],scale=.49,advance=21)
+        pose = visual_pose.get('corrected_pose')
+        if visual_pose['status'] == 'corrected' and pose is not None:
+            row(f"VIS X={pose['x_mm']:.1f} Y={pose['y_mm']:.1f}",(255,255,0),.53,21)
+            row(f"VIS heading={pose['heading_deg']:.2f} deg",(255,255,0),.53,21)
+        else:
+            row('VIS pose pending',scale=.50,advance=21)
     row('BLUE contour / GREEN observed / RED fit',scale=.51,advance=23)
     row('YELLOW visible / MAGENTA estimate / CYAN ref',scale=.51,advance=23)
     if ranger is not None:

@@ -14,7 +14,7 @@ from unittest.mock import patch
 import numpy as np
 
 import camera_profiles as profiles
-from calibration.ranging_report import analyse_records, percentile95, render_report, save_reports
+from calibration.ranging_report import apply_analysis_range, analyse_records, percentile95, render_report, save_reports
 from calibration.validate_ranging import main, read_records
 from test_corner_ranging import fixture
 
@@ -31,6 +31,50 @@ def record(x=1500,y=0,u=320,v=360,z=0):
 
 
 class GeometryReportTests(unittest.TestCase):
+    def test_55_points_inclusive_adjustable_range_keeps_full_report(self):
+        intrinsics,mount = calibration()
+        xs = [300+10*i for i in range(19)]+[500]+[600+10*i for i in range(35)]
+        data = analyse_records([record(x) for x in xs],intrinsics,mount)
+        original_summary = dict(data["summary"])
+        apply_analysis_range(data,x_max_mm=500)
+        self.assertEqual(len(data["points"]),55)
+        self.assertEqual(data["points"][-1]["point_id"],"P055")
+        self.assertEqual(data["summary"],original_summary)
+        self.assertEqual(data["range_summary"]["count"],20)
+        self.assertIn("P020",data["analysis_range"]["point_ids"])
+        self.assertNotIn("P021",data["analysis_range"]["point_ids"])
+        self.assertAlmostEqual(data["range_summary"]["mean_horizontal_error_mm"],
+                               sum(1500-x for x in xs[:20])/20)
+        text = render_report(data)
+        self.assertIn("X≤500 mm",text)
+        self.assertIn("入选=20/55",text)
+        apply_analysis_range(data,x_min_mm=500,x_max_mm=600)
+        self.assertEqual(data["analysis_range"]["point_ids"],["P020","P021"])
+        apply_analysis_range(data)
+        self.assertEqual(data["range_summary"]["count"],55)
+        self.assertFalse(data["analysis_range"]["active"])
+
+    def test_range_uses_reference_not_prediction_and_handles_empty_invalid(self):
+        intrinsics,mount = calibration()
+        data = analyse_records([record(400,-800),record(500,0,u=-1),record(600,100)],intrinsics,mount)
+        apply_analysis_range(data,x_max_mm=500,y_max_mm=0,r_min_mm=600)
+        self.assertEqual(data["analysis_range"]["point_ids"],["P001"])
+        self.assertGreater(data["points"][0]["predicted_body_mm"][0],500)
+        apply_analysis_range(data,x_min_mm=500,x_max_mm=500)
+        self.assertEqual(data["range_summary"]["count"],1)
+        self.assertEqual(data["range_summary"]["invalid_count"],1)
+        self.assertIsNone(data["range_summary"]["mean_horizontal_error_mm"])
+        apply_analysis_range(data,x_max_mm=100)
+        self.assertEqual(data["range_summary"]["count"],0)
+        self.assertIsNone(data["range_summary"]["rmse_horizontal_mm"])
+        self.assertIn("本范围没有采集点",render_report(data))
+        before = json.dumps(data,sort_keys=True)
+        for bounds in ({"x_min_mm":501,"x_max_mm":500},{"y_min_mm":2,"y_max_mm":1},
+                       {"r_min_mm":-1},{"x_max_mm":float("nan")},{"r_max_mm":float("inf")}):
+            with self.assertRaises(ValueError):
+                apply_analysis_range(data,**bounds)
+            self.assertEqual(json.dumps(data,sort_keys=True),before)
+
     def test_per_point_metrics_statistics_and_invalid_denominator(self):
         intrinsics,mount = calibration()
         data = analyse_records([record(),record(1497,-4),record(1490),record(u=-1)],
@@ -179,10 +223,12 @@ class GeometryReportTests(unittest.TestCase):
             for _ in range(2):
                 with redirect_stdout(io.StringIO()) as terminal:
                     self.assertEqual(main(["--camera","testcam","--points",str(a),str(b),
-                                           "--output",str(out),"--max-error-mm","6"]),0)
+                                           "--output",str(out),"--max-error-mm","6","--x-max-mm","1497"]),0)
                 self.assertIn("P003",terminal.getvalue())
             data = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(data["summary"]["count"],3)
+            self.assertEqual(data["range_summary"]["count"],2)
+            self.assertEqual(data["analysis_range"]["x_max_mm"],1497)
             self.assertEqual(data["points"][2]["source_file"],str(b.resolve()))
             self.assertEqual(len(data["input_files"]),2)
             self.assertEqual(data["intrinsics_sha256"],profiles.file_sha256(intrinsic_path))
@@ -217,10 +263,21 @@ class GeometryReportTests(unittest.TestCase):
                     self.assertFalse(errors.called)
                     self.assertEqual(len(build.call_args.args[1]),2)
                     window = [w for w in root.winfo_children() if isinstance(w,tk.Toplevel)][0]
-                    text = [w for w in window.winfo_children() if isinstance(w,tk.Frame)][0].winfo_children()[1]
-                    # ScrolledText's frame owns a scrollbar and the actual Text.
-                    texts = [w for w in text.master.winfo_children() if isinstance(w,tk.Text)]
+                    def find_texts(widget):
+                        return ([widget] if isinstance(widget,tk.Text) else [])+[
+                            text for child in widget.winfo_children() for text in find_texts(child)]
+                    texts = find_texts(window)
                     self.assertIn("P002",texts[0].get("1.0","end"))
+                    window.analysis_range_vars["x_max_mm"].set("1497")
+                    self.assertTrue(window.refresh_analysis_range())
+                    self.assertEqual(expected["range_summary"]["count"],1)
+                    self.assertIn("X≤1497 mm",texts[0].get("1.0","end"))
+                    window.analysis_range_vars["x_max_mm"].set("")
+                    self.assertTrue(window.refresh_analysis_range())
+                    self.assertEqual(expected["range_summary"]["count"],2)
+                    window.analysis_range_vars["x_max_mm"].set("invalid")
+                    self.assertFalse(window.refresh_analysis_range())
+                    self.assertTrue(errors.called)
                     self.assertEqual([asdict(p) for p in app.points],before)
             finally:
                 app.close()

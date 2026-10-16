@@ -130,7 +130,8 @@ class PoseMapApp:
         self.output_var = tk.StringVar(value=str(self.output_path))
         self.zone_mode_var = tk.StringVar(value="模式：选择位姿")
         self.identity_var = tk.StringVar(value="安全区：上方 1，下方 2；从地图左上角顺时针编号")
-        self.live_identity_var = tk.StringVar(value="视觉回传：等待相机；不修改仿真位姿")
+        self.live_identity_var = tk.StringVar(value="视觉回传：等待相机；青色显示校正位姿")
+        self.corrected_pose: Optional[Pose2D] = None
         self.zone_vars = {
             key: tk.StringVar() for key in (
                 "name", "x_min_mm", "x_max_mm", "y_min_mm", "y_max_mm",
@@ -199,11 +200,30 @@ class PoseMapApp:
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
 
-        side = ttk.Frame(main, width=270)
-        side.grid(row=0, column=1, sticky="ns")
+        # Keep a long feedback report or the calibration controls from forcing
+        # the whole window taller than the available display.
+        sidebar = ttk.Frame(main)
+        sidebar.grid(row=0, column=1, sticky="ns")
+        sidebar.rowconfigure(0, weight=1)
+        self.sidebar_canvas = tk.Canvas(sidebar, width=285, height=480,
+                                        highlightthickness=0, takefocus=True)
+        self.sidebar_canvas.grid(row=0, column=0, sticky="ns")
+        self.sidebar_scrollbar = ttk.Scrollbar(
+            sidebar, orient="vertical", command=self.sidebar_canvas.yview)
+        self.sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.sidebar_canvas.configure(yscrollcommand=self.sidebar_scrollbar.set)
+        side = self.sidebar_content = ttk.Frame(self.sidebar_canvas)
+        self._sidebar_window = self.sidebar_canvas.create_window(
+            (0, 0), window=side, anchor="nw")
+        side.bind("<Configure>", self._update_sidebar_scrollregion)
+        self.sidebar_canvas.bind("<Configure>", self._resize_sidebar_content)
+        self.sidebar_canvas.bind("<Prior>", lambda _: self.sidebar_canvas.yview_scroll(-1, "pages"))
+        self.sidebar_canvas.bind("<Next>", lambda _: self.sidebar_canvas.yview_scroll(1, "pages"))
+        self.sidebar_canvas.bind("<Home>", lambda _: self.sidebar_canvas.yview_moveto(0))
+        self.sidebar_canvas.bind("<End>", lambda _: self.sidebar_canvas.yview_moveto(1))
         side.columnconfigure(1, weight=1)
         row = 0
-        ttk.Label(side, text="选定位姿", font=("Microsoft YaHei UI", 13, "bold")).grid(
+        ttk.Label(side, text="惯导输入位姿", font=("Microsoft YaHei UI", 13, "bold")).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=(0, 8)
         )
         row += 1
@@ -294,6 +314,14 @@ class PoseMapApp:
             justify="left",
         ).grid(row=row, column=0, columnspan=3, sticky="w")
 
+        # A local bindtag covers entries/buttons too, without intercepting wheel
+        # events over the map or another dialog. No application-wide bind_all.
+        self._sidebar_scroll_tag = f"SidebarScroll_{id(self)}"
+        self.root.bind_class(self._sidebar_scroll_tag, "<MouseWheel>", self._scroll_sidebar)
+        self.root.bind_class(self._sidebar_scroll_tag, "<Button-4>", self._scroll_sidebar)
+        self.root.bind_class(self._sidebar_scroll_tag, "<Button-5>", self._scroll_sidebar)
+        self._bind_sidebar_scroll(self.sidebar_canvas)
+
         status = ttk.Frame(main)
         status.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         status.columnconfigure(1, weight=1)
@@ -301,6 +329,32 @@ class PoseMapApp:
         ttk.Label(status, textvariable=self.status_var, anchor="e").grid(row=0, column=1, sticky="ew")
         ttk.Label(status, textvariable=self.identity_var, foreground="#087f23").grid(
             row=1, column=0, columnspan=2, sticky="w")
+
+    def _update_sidebar_scrollregion(self, _: Optional[tk.Event] = None) -> None:
+        self.sidebar_canvas.configure(scrollregion=self.sidebar_canvas.bbox("all"))
+
+    def _resize_sidebar_content(self, event: tk.Event) -> None:
+        self.sidebar_canvas.itemconfigure(self._sidebar_window, width=max(1, event.width))
+        self._update_sidebar_scrollregion()
+
+    def _bind_sidebar_scroll(self, widget: tk.Widget) -> None:
+        widget.bindtags((self._sidebar_scroll_tag,) + widget.bindtags())
+        for child in widget.winfo_children():
+            self._bind_sidebar_scroll(child)
+
+    def _scroll_sidebar(self, event: tk.Event) -> str:
+        if getattr(event, "num", None) in (4, 5):
+            steps = -1 if event.num == 4 else 1
+        else:
+            delta = getattr(event, "delta", 0)
+            if not delta:
+                return "break"
+            steps = -int(math.copysign(max(1, abs(delta) // 120), delta))
+        region = self.sidebar_canvas.bbox("all")
+        if region is not None and region[3] > region[1]:
+            first = self.sidebar_canvas.yview()[0]
+            self.sidebar_canvas.yview_moveto(first + steps * 20 / (region[3] - region[1]))
+        return "break"
 
     def _on_resize(self, _: tk.Event) -> None:
         if self._resize_job is not None:
@@ -379,32 +433,54 @@ class PoseMapApp:
         self._draw_pose()
 
     def _draw_safety_zones(self) -> None:
-        templates, reason = active_templates(self.pose, self.zones, self.template_model)
-        active_ids = {t.safety_id for t in templates}
-        summary = "、".join(f"安全区{t.safety_id}/{SIDE_NAMES[t.side]}" for t in templates)
-        self.identity_var.set("位姿模板候选（非视觉确认）：" + (summary or reason))
+        from pose_association import report_matches_pose
+        self.canvas.delete("safety_zone_background")
         if self.template_model is None:
             self.identity_var.set("模板文件错误：" + str(self.template_reader.error))
             return
+        active_ids = set()
+        data = self.live_association
+        if report_matches_pose(data, self.pose):
+            visual = data.get("visual_pose")
+            if isinstance(visual, dict):
+                view = visual.get("candidate_view") or {}
+                configured_ids = {zone["id"] for zone in self.template_model["safety_zones"]}
+                active_ids = {value for value in view.get("possible_safety_ids", ())
+                              if isinstance(value, int) and not isinstance(value, bool)
+                              and value in configured_ids}
+                summary = "、".join(f"安全区{value}" for value in sorted(active_ids)) or "无"
+                self.identity_var.set("视野候选（非视觉确认）：" + summary)
+            else:
+                templates, reason = active_templates(self.pose, self.zones, self.template_model)
+                active_ids = {template.safety_id for template in templates}
+                summary = "、".join(f"安全区{t.safety_id}/{SIDE_NAMES[t.side]}" for t in templates)
+                self.identity_var.set("旧格式模板候选（未接入视野预筛，非视觉确认）：" + (summary or reason))
+        else:
+            self.identity_var.set("视野候选：等待当前位姿的标定视野回传（未确认）")
         for zone in self.template_model["safety_zones"]:
+            tags = ("safety_zone_background", f"safety_zone_{zone['id']}")
+            if zone["id"] in active_ids:
+                tags += ("candidate_safety_zone",)
             points = [self.transform.world_to_canvas(*p) for p in map_corners(zone)]
             color = "#087f23" if zone["id"] in active_ids else "#142d69"
-            self.canvas.create_polygon(*[v for p in points for v in p], fill="", outline=color, width=3)
+            self.canvas.create_polygon(*[v for p in points for v in p], fill="", outline=color, width=3, tags=tags)
             cx = sum(p[0] for p in points)/4
             cy = sum(p[1] for p in points)/4
             label = self.canvas.create_text(cx, cy, text=f"安全区 {zone['id']}",
-                fill=color, font=("Microsoft YaHei UI", 11, "bold"))
-            box = self.canvas.create_rectangle(*self.canvas.bbox(label), fill="white", outline=color)
+                fill=color, font=("Microsoft YaHei UI", 11, "bold"), tags=tags)
+            box = self.canvas.create_rectangle(*self.canvas.bbox(label), fill="white", outline=color, tags=tags)
             self.canvas.tag_lower(box, label)
             for index, (x, y) in enumerate(points, 1):
-                self.canvas.create_oval(x-4, y-4, x+4, y+4, fill=color, outline="white")
+                self.canvas.create_oval(x-4, y-4, x+4, y+4, fill=color, outline="white", tags=tags)
                 # Put IDs just outside the rectangle, with white labels over the map.
                 dx = -9 if index in (1, 4) else 9
                 anchor = "e" if dx < 0 else "w"
                 label = self.canvas.create_text(x+dx, y, text=f"{zone['id']}.{index}",
-                    anchor=anchor, fill=color, font=("Microsoft YaHei UI", 11, "bold"))
-                box = self.canvas.create_rectangle(*self.canvas.bbox(label), fill="white", outline="")
+                    anchor=anchor, fill=color, font=("Microsoft YaHei UI", 11, "bold"), tags=tags)
+                box = self.canvas.create_rectangle(*self.canvas.bbox(label), fill="white", outline="", tags=tags)
                 self.canvas.tag_lower(box, label)
+        self.canvas.tag_raise("pose")
+        self.canvas.tag_raise("live_identity")
 
     def show_identity_rules(self) -> None:
         window = tk.Toplevel(self.root)
@@ -421,29 +497,18 @@ class PoseMapApp:
                 text.insert("end", f"\n安全区 {zone['id']}（外框）\n")
                 for i, point in enumerate(map_corners(zone), 1):
                     text.insert("end", f"  {zone['id']}.{i} {CORNER_NAMES[i]}  {point} mm\n")
-            text.insert("end", "\n观察区先按半场归属：Y ≥ 1500 mm 为安全区 1，Y < 1500 mm 为安全区 2。\n"
-                "每个半场由西侧、中央正面、东侧和两个斜视区组成；位置命中后，再检查该区自己的航向容差。\n"
-                "不再要求横向投影落在安全区外框内，因此越过安全区横向边界的斜视位置仍可命中。\n"
-                "正面/侧面模板从角点沿有效边界判断有向延伸，只有唯一编号才显示确认。\n\n"
-                "局部模板：近左=向右+右上；近右=向左+左上；\n"
-                "远左=向右+左下；远右=向左+右下。\n"
-                f"横边容差 ±{model['horizontal_tolerance_deg']:g}°，斜边容差 ±{model['diagonal_tolerance_deg']:g}°。\n\n")
-            for side, view in model["views"].items():
-                if view.get("identity_enabled", True):
-                    text.insert("end", f"{SIDE_NAMES[side]}：近左/近右/远左/远右 → {view['slots']}\n")
-                elif view.get("identity_mode") == "pose_projection":
-                    slots = view["image_slots"]
-                    text.insert("end", f"{SIDE_NAMES[side]}：四点齐全时按画面左/上/右/下 → {slots}；"
-                        "缺角时按位姿投影与画面横坐标匹配\n")
-                else:
-                    text.insert("end", f"{SIDE_NAMES[side]}：未启用角点编号\n")
-            projection = model["diagonal_pose_projection"]
-            text.insert("end", f"\n斜视投影：水平视场 {projection['horizontal_fov_deg']:g}°，"
-                f"画面方位匹配容差 ±{projection['image_bearing_tolerance_deg']:g}°。\n")
-            text.insert("end", "\n观察分区管理中选择对应安全区和观察方向；编号不依赖分区名称。\n"
-                "相机程序 --scene auto 按命中模板选择正面/侧面检测。\n"
-                "初始阈值尚需实拍验证；超出模板、缺边、多解、重复编号均待定。\n"
-                f"配置文件：{self.template_reader.path}\n")
+            text.insert("end", "\n安全区候选：以输入位置为中心，默认200毫米误差范围，结合输入航向、标定视野和定位量程检查八个地图角点。某区至少一角可能可见就保留该区。\n"
+                "分区模板仅帮助选择识别模式，不用Y=1500半场规则确认安全区身份。\n\n"
+                "全部可见/补偿角点几何测距后，直接选择距离车体原点最近的有效点，不再标注UP/LOW。\n"
+                "读取形成该点的两条支持边，将真实边界采样点投影到地面，拟合从角点向边内延伸的有向边。\n"
+                "两条边的车体系方向角加输入航向，与候选安全区的地图边方向匹配；默认角度容差15度。\n"
+                "西北角：东+南；东北角：西+南；东南角：西+北；西南角：东+北。\n\n"
+                "身份唯一后，视觉航向=地图边方向-视觉车体系边方向；两边一致时取圆周平均。\n"
+                "视觉位置=地图角点坐标-视觉航向旋转后的角点车体系坐标。\n"
+                "最终视觉航向与位置不使用输入位姿数值作平均或回退。\n\n"
+                "红色箭头：输入位姿；青色箭头：本帧视觉校正位姿。最近点缺边、角度不相容、多区多解时不更新。\n"
+                "输入改变或回传过期时清除旧视觉箭头。最近点及两条支持边按地面模型处理，需实拍验证。\n"
+                f"地图配置文件：{self.template_reader.path}\n")
         text.configure(state="disabled")
 
     def _draw_zones(self) -> None:
@@ -513,20 +578,23 @@ class PoseMapApp:
         self._draw_live_identity()
 
     def set_live_association(self, data) -> None:
-        """Display camera feedback only; never update or publish a vehicle pose."""
+        """Update the separate visual pose; keep the user-provided input for comparison."""
         self.live_association = data
+        self._draw_safety_zones()
         self._draw_live_identity()
 
     def _draw_live_identity(self) -> None:
-        from pose_association import report_matches_pose
+        from pose_association import report_matches_pose, validated_corrected_pose
         self.canvas.delete("live_identity")
+        self.corrected_pose = None
         data = self.live_association
         if data is None or not report_matches_pose(data, self.pose):
             self.live_identity_var.set("视觉回传：等待当前位姿的识别结果")
             return
-        if data.get('ground_association') is not None:
-            from ground_corner_map import draw_ground_feedback
-            summary = draw_ground_feedback(self.canvas, self.transform, data, self.pose)
+        if data.get('visual_pose') is not None:
+            from ground_corner_map import draw_visual_feedback
+            self.corrected_pose = validated_corrected_pose(data)
+            summary = draw_visual_feedback(self.canvas, self.transform, data, self.pose)
             self.live_identity_var.set('\n'.join(summary))
             return
         ids = data.get("confirmed_corner_ids", [])
@@ -535,11 +603,12 @@ class PoseMapApp:
             summary.append("标定已变更，测距停用")
         else:
             measured = [r for r in data.get("corners", [])
-                        if r.get("valid") and not r.get("inferred") and r.get("corner_id")]
+                        if r.get("valid") and not r.get("inferred")]
             for r in measured[:2]:
-                summary.append(f'{r["corner_id"]}：r={r["distance_mm"]:.1f} mm（车体）')
+                label = r.get("corner_id") or r.get("label", "未编号点")
+                summary.append(f'{label}：r={r["distance_mm"]:.1f} mm（车体）')
             if not measured:
-                summary.append("无已编号的直接可见测距点")
+                summary.append("无直接可见的有效测距点")
         self.live_identity_var.set("\n".join(summary))
         if self.template_model is None:
             return

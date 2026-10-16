@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
-import math
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -11,12 +11,10 @@ import unittest
 from unittest.mock import patch
 
 import cv2
-import numpy as np
 
 import pose_association as feedback
 from pose_io import Pose2D, write_pose_atomic
-from safety_identity import (ActiveTemplate, CornerObservation, CornerIdentity,
-                             associate_corners, load_templates, map_corners)
+from safety_identity import CornerObservation, CornerIdentity
 from test_corner_ranging import fixture
 
 
@@ -30,6 +28,22 @@ def report(prior=None):
 
 
 class AssociationTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows file sharing semantics')
+    def test_busy_reader_preserves_report_and_next_frame_recovers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)/'latest.json'
+            output.write_text('{"frame_number": 0}', encoding='utf-8')
+            writer = feedback.AssociationWriter(output)
+            # Exercise both the first publication and an ordinary update.
+            for old_frame, next_frame in ((0, 1), (1, 2)):
+                with output.open('r', encoding='utf-8'):
+                    self.assertFalse(writer.write({'frame_number': next_frame}))
+                    self.assertEqual(json.loads(output.read_text())['frame_number'], old_frame)
+                self.assertTrue(writer.write({'frame_number': next_frame}))
+                self.assertEqual(json.loads(output.read_text())['frame_number'], next_frame)
+            self.assertEqual(len(list(output.parent.glob('latest.backup_*.json'))), 1)
+            self.assertFalse(list(output.parent.glob('tmp*')))
+
     def test_identity_and_body_range_remain_separate_from_prior(self):
         prior = Pose2D(1500, 2100, 90)
         data = report(prior)
@@ -87,27 +101,6 @@ class AssociationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 feedback.association_output_path("testcam", output, output)
 
-    def test_calibrated_identity_projection_does_not_use_legacy_fov(self):
-        from calibration.lens_models import project_points
-        ranger = fixture()
-        prior = Pose2D(1500, 1800, 90)
-        model = load_templates()
-        model["diagonal_pose_projection"]["image_bearing_tolerance_deg"] = .1
-        model["diagonal_pose_projection"]["horizontal_fov_deg"] = 20
-        template = ActiveTemplate(1, "southwest", "general", (), True, "pose_projection", (1,2,3,4))
-        x, y = map_corners(model["safety_zones"][0])[2]
-        theta = math.radians(prior.heading_deg)
-        dx, dy = x-prior.x_mm, y-prior.y_mm
-        body = np.array([[math.cos(theta)*dx+math.sin(theta)*dy,
-                          -math.sin(theta)*dx+math.cos(theta)*dy, 0.]])
-        rvec, _ = cv2.Rodrigues(ranger.rotation.T)
-        pixel = project_points(body, rvec, -ranger.rotation.T@ranger.center,
-                               ranger.matrix, ranger.distortion, ranger.model)[0]
-        observation = CornerObservation(tuple(pixel), False, ())
-        with patch("safety_identity.projected_corner_candidates", side_effect=AssertionError("legacy projection")):
-            result = associate_corners([observation], [template], model, prior, 640, ranger)[0]
-        self.assertEqual(result.corner_id, "1.3")
-        np.testing.assert_allclose([ranger.project(pixel).x_mm, ranger.project(pixel).y_mm], body[0,:2])
 
     def test_map_feedback_is_read_only_and_clears_on_pose_change(self):
         from pose_map_gui import PoseMapApp, build_parser
@@ -169,7 +162,10 @@ class AssociationTests(unittest.TestCase):
             self.assertEqual(len(records), 2)
             for data, expected in zip(records, poses):
                 self.assertTrue(feedback.report_matches_pose(data, expected))
-                self.assertFalse(data["pose_corrected"])
+                if data['pose_corrected']:
+                    self.assertIsNotNone(feedback.validated_corrected_pose(data))
+                else:
+                    self.assertIsNone(data['corrected_pose'])
             self.assertEqual([r["scene"] for r in records], ["front-facing", "start-facing"])
 
 

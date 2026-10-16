@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from ground_corner_map import draw_ground_feedback
+from ground_corner_map import draw_visual_feedback
 from pose_io import Pose2D
 import run_app
 
@@ -34,103 +34,100 @@ class IdentityTransform:
         return x, y
 
 
+
 def report():
-    return dict(frame_number=417, created_at_unix=100., confirmed_corner_ids=['1.3'],
-                pose_corrected=False, ground_association=dict(
-        config={'prior_radius_mm': 200.}, possible_footprint_map_mm=[],
-        central_footprint_map_mm=[], observations=[dict(
-            corner_id='1.3', map_center_mm=[1830., 2640.], map_radius_mm=230.,
-            inferred=False, range_mm=630.)], landmarks=[dict(
-            corner_id='1.3', map_xy_mm=[1830., 2640.], possibly_visible=True)],
-        vision_vehicle_position_mm=[1500., 2100.], status='unique',
-        max_distance_mm=1000., possible_safety_ids=[1]))
+    pose=dict(x_mm=1500.,y_mm=2100.,heading_deg=90.)
+    return dict(frame_number=417,created_at_unix=100.,confirmed_corner_ids=['1.3'],
+                pose_corrected=True,corrected_pose=pose.copy(),
+                simulated_prior=dict(x_mm=1500.,y_mm=2100.,heading_deg=86.),
+                visual_pose=dict(schema='safety.nearest_visual_pose.v1',status='corrected',
+                    pose_corrected=True,heading_source='visual_ground_edges',corner_id='1.3',
+                    corrected_pose=pose.copy(),selected_corner=dict(inferred=False,range_mm=630.,
+                        pixel=[320,344],body_xy_mm=[540.,-330.]),
+                    candidate_view=dict(prior_radius_mm=200.,max_distance_mm=1000.,
+                        possible_safety_ids=[1],central_footprint_map_mm=[],possible_footprint_map_mm=[],
+                        landmarks=[dict(corner_id='1.3',map_xy_mm=[1830.,2640.],possibly_visible=True)])))
 
 
 class GroundFeedbackTests(unittest.TestCase):
-    def draw(self, data):
-        canvas = RecordingCanvas()
-        with patch('ground_corner_map.time.time', return_value=102.5):
-            summary = draw_ground_feedback(canvas, IdentityTransform(), data,
-                                           Pose2D(1500., 2100., 90.))
-        candidates = [draw for draw in canvas.draws if draw[2].get('fill') == '#00dddd']
-        return '\n'.join(summary), candidates
+    def draw(self,data):
+        canvas=RecordingCanvas()
+        with patch('ground_corner_map.time.time',return_value=102.5):
+            summary=draw_visual_feedback(canvas,IdentityTransform(),data,Pose2D(1500.,2100.,86.))
+        arrows=[draw for draw in canvas.draws if draw[0]=='line' and draw[2].get('arrow')=='last']
+        return '\n'.join(summary),arrows
 
-    def test_matching_unique_ids_show_candidate_and_feedback_frame_age(self):
-        data = report()
-        before = deepcopy(data)
-        summary, candidates = self.draw(data)
-        self.assertEqual(len(candidates), 3)
-        self.assertIn('回传帧：417；反馈年龄：2.5 s（非拍摄时间）', summary)
-        self.assertIn('视觉反算候选：(1500.0, 2100.0) mm（未反写位姿）', summary)
-        self.assertIn('量程：1000 mm', summary)
-        self.assertEqual(data, before)
-
-    def test_no_confirmed_ids_rejects_stale_position_field(self):
-        data = report()
-        data['confirmed_corner_ids'] = []
-        data['ground_association']['observations'][0]['corner_id'] = None
-        summary, candidates = self.draw(data)
-        self.assertEqual(candidates, [])
-        self.assertIn('下沿编号：?（未确认）', summary)
-        self.assertIn('未输出位置：本帧无确认编号', summary)
-        self.assertNotIn('1500.0, 2100.0', summary)
-
-    def test_non_unique_status_cannot_show_stale_position_even_with_ids(self):
-        for status in ('no_match', 'ambiguous', 'waiting_for_ground_corners'):
-            with self.subTest(status=status):
-                data = report()
-                data['ground_association']['status'] = status
-                summary, candidates = self.draw(data)
-                self.assertEqual(candidates, [])
-                self.assertIn('未输出位置：本帧身份未确认', summary)
-                self.assertNotIn('视觉反算候选：(', summary)
-
-    def test_partial_unique_with_corresponding_ids_can_show_candidate(self):
-        data = report()
-        data['ground_association']['status'] = 'partial_unique'
-        self.assertEqual(len(self.draw(data)[1]), 3)
-
-    def test_missing_or_mismatched_root_ids_fail_closed(self):
-        for ids in ([], ['1.4'], ['1.3', '1.4']):
-            with self.subTest(ids=ids):
-                data = report()
-                data['confirmed_corner_ids'] = ids
-                summary, candidates = self.draw(data)
-                self.assertEqual(candidates, [])
-                self.assertNotIn('视觉反算候选：(', summary)
-
-    def test_numeric_range_and_missing_feedback_timestamp_are_explicit(self):
-        data = report()
-        data['ground_association']['max_distance_mm'] = 1000.
-        del data['created_at_unix']
-        summary, _ = self.draw(data)
-        self.assertIn('量程：1000 mm', summary)
-        self.assertIn('反馈年龄：未知', summary)
-        data['ground_association']['status'] = 'calibration_unavailable'
-        self.assertIn('等待地面测距', self.draw(data)[0])
-
-    def test_explicit_unlimited_feedback_remains_supported(self):
+    def test_visual_arrow_uses_visual_heading_and_displays_both_poses(self):
         data=report()
-        data['ground_association']['max_distance_mm']=None
+        before=deepcopy(data)
+        summary,arrows=self.draw(data)
+        self.assertEqual(len(arrows),1)
+        x,y,ex,ey=arrows[0][1]
+        self.assertAlmostEqual(ex,x,places=6)
+        self.assertAlmostEqual(ey-y,64.,places=6)
+        self.assertIn('惯导输入：X=1500.0 Y=2100.0 θ=86.00°',summary)
+        self.assertIn('视觉校正：X=1500.0 Y=2100.0 θ=90.00°',summary)
+        self.assertIn('Δθ=+4.00°',summary)
+        self.assertIn('回传帧：417；反馈年龄：2.5 s（非拍摄时间）',summary)
+        self.assertEqual(data,before)
+
+    def test_unconfirmed_status_never_draws_stale_pose(self):
+        for status in ('identity_no_match','ambiguous_safety_zone','two_support_edges_required'):
+            data=report()
+            data['visual_pose']['status']=status
+            summary,arrows=self.draw(data)
+            self.assertFalse(arrows)
+            self.assertIn('本帧未更新视觉位姿',summary)
+
+    def test_mismatched_ids_or_pose_fields_never_draw(self):
+        for ids in ([],['1.4'],['1.3','1.4']):
+            data=report();data['confirmed_corner_ids']=ids
+            self.assertFalse(self.draw(data)[1])
+        data=report();data['corrected_pose']['heading_deg']=86.
+        self.assertFalse(self.draw(data)[1])
+        data=report();data['pose_corrected']=False
+        self.assertFalse(self.draw(data)[1])
+
+    def test_invalid_visual_pose_is_not_drawn(self):
+        for value in (None,[],3.,dict(x_mm=float('nan'),y_mm=2100.,heading_deg=90.),
+                      dict(x_mm=1500.,y_mm=2100.,heading_deg='90')):
+            data=report();data['visual_pose']['corrected_pose']=value;data['corrected_pose']=value
+            self.assertFalse(self.draw(data)[1])
+
+    def test_unknown_feedback_age_and_unlimited_range_are_explicit(self):
+        data=report();del data['created_at_unix']
+        data['visual_pose']['candidate_view']['max_distance_mm']=None
         summary,_=self.draw(data)
-        self.assertIn('量程：不限距离',summary)
+        self.assertIn('反馈年龄：未知',summary)
+        self.assertIn('定位量程：不限距离',summary)
 
-    def test_none_position_does_not_leave_candidate_mark(self):
-        data = report()
-        data['ground_association']['vision_vehicle_position_mm'] = None
-        summary, candidates = self.draw(data)
-        self.assertEqual(candidates, [])
-        self.assertIn('未输出位置：本帧无视觉反算结果', summary)
-
-    def test_invalid_position_coordinates_are_not_drawn(self):
-        for estimate in (3., [1500.], [float('nan'), 2100.], ['1500', 2100.]):
-            with self.subTest(estimate=estimate):
-                data = report()
-                data['ground_association']['vision_vehicle_position_mm'] = estimate
-                summary, candidates = self.draw(data)
-                self.assertEqual(candidates, [])
-                self.assertIn('未输出位置：本帧视觉反算坐标无效', summary)
-
+    def test_real_map_keeps_input_and_updates_separate_visual_state_then_clears(self):
+        import tkinter as tk
+        from pose_map_gui import PoseMapApp,build_parser
+        root=tk.Tk();root.withdraw()
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'pose.json'
+            app=PoseMapApp(root,build_parser().parse_args(['--output',str(path),
+                '--x','1500','--y','2100','--heading','86']))
+            try:
+                root.update();app.publish_pose()
+                before=path.read_bytes();prior=app.pose
+                app.set_live_association(report())
+                self.assertEqual(app.corrected_pose,Pose2D(1500.,2100.,90.))
+                self.assertTrue(app.canvas.find_withtag('corrected_pose'))
+                self.assertTrue(app.canvas.find_withtag('pose_uncertainty'))
+                self.assertEqual(app.pose,prior)
+                self.assertEqual(path.read_bytes(),before)
+                app.set_live_association(None)
+                self.assertIsNone(app.corrected_pose)
+                self.assertFalse(app.canvas.find_withtag('corrected_pose'))
+                app.set_live_association(report())
+                app.live_output_var.set(False)
+                app._set_pose(Pose2D(1500.,2100.,85.),'test changed input')
+                self.assertIsNone(app.corrected_pose)
+                self.assertFalse(app.canvas.find_withtag('corrected_pose'))
+            finally:
+                app.close()
 
 class LauncherFeedbackTests(unittest.TestCase):
     def test_default_command_restores_one_metre_localization_cap(self):

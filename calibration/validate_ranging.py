@@ -5,7 +5,7 @@ import csv
 from pathlib import Path
 
 from calibration.calibration_io import validate_point_sources
-from calibration.ranging_report import build_camera_report, render_report, save_reports
+from calibration.ranging_report import apply_analysis_range, build_camera_report, render_report, save_reports
 from camera_profiles import isolated_path, load_profiles, file_sha256
 
 
@@ -42,6 +42,10 @@ def main(argv=None) -> int:
     parser.add_argument("--min-plane-angle-deg", type=float, default=3.)
     parser.add_argument("--max-error-mm", type=float, help="optional horizontal-position error pass threshold")
     parser.add_argument("--bin-mm", type=float, default=300., help="reference horizontal-distance grouping width")
+    for axis in ("x","y","r"):
+        for bound in ("min","max"):
+            parser.add_argument(f"--{axis}-{bound}-mm", type=float,
+                                help="inclusive analysis bound on surveyed coordinates; omitted=unlimited")
     args = parser.parse_args(argv)
     paths = [isolated_path(p, args.camera, result=False, default_name="range_validation.csv")
              for p in (args.points or [None])]
@@ -51,6 +55,8 @@ def main(argv=None) -> int:
                                  min_plane_angle_deg=args.min_plane_angle_deg,
                                  error_limit_mm=args.max_error_mm, bin_mm=args.bin_mm)
     result["input_files"] = sources
+    apply_analysis_range(result, **{f"{axis}_{bound}_mm": getattr(args,f"{axis}_{bound}_mm")
+                                   for axis in ("x","y","r") for bound in ("min","max")})
     output, txt, backup, txt_backup = save_reports(output, result)
     print(render_report(result), end="")
     print(f"saved {output}\nsaved {txt}")
